@@ -12,7 +12,7 @@ conda activate maniskill
 cd project_dir/ManiSkill/mani_skill/examples
 python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" 
 python gen_dataset_cleanup.py
-# this generates /tmp/clevr-act-1.zip
+# this generates /tmp/clevr-act-2.zip
 ```
 
 ### Other simultation envs
@@ -27,14 +27,13 @@ python -m mani_skill.examples.demo_random_action -e "ReplicaCAD_SceneManipulatio
 ### First start by copying dataset to server
 ```
 # on local machine
-cp /tmp/clevr-act-1.zip /data/lmbraid19/argusm/datasets
+rsync -a --progress /tmp/clevr-act-2.zip /data/lmbraid19/argusm/datasets
 
 # on cluster machin 
-mkdir /tmp/clevr-act-1
-cd /tmp/clevr-act-1
-cp /misc/lmbraid19/argusm/datasets/clevr-act-1.zip .
-unzip -q clevr-act-1.zip
-cp dataset/_annotations.test.jsonl dataset/_annotations.valid.jsonl
+mkdir /tmp/clevr-act-2
+cd /tmp/clevr-act-2
+rsync -a --progress /misc/lmbraid19/argusm/datasets/clevr-act-2.zip .
+
 ```
 
 ### Running training
@@ -49,3 +48,14 @@ conda create env -n paligemma python=3.12
 3. Run notebook and follow initial instructions for Kaggle / model access
 3. Get a kaggle key and create `~/.kaggle/kaggle.json` with `{"username":"XXX","key":"YYY"}`
 3. Run `./cVLA/finetune_paligemma_robotflow.ipynb`
+
+
+### Running motion planning
+
+```
+conda activate maniskill
+cd project_dir/ManiSkill/mani_skill/examples
+python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" -c "pd_joint_pos"
+
+python -m mani_skill.examples.motionplanning.panda.run --env-id ClevrMove-v1 --traj-name="trajectory" --only-count-success --save-video -n 1
+```
