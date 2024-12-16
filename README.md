@@ -4,7 +4,7 @@
 
 
 ## Generate the dataset
-Create a conda env ( try default, otherwise downgrade to 3.10)
+Create a conda env ( try python 3.12, otherwise downgrade to 3.10)
 ```
 conda create env -n maniskill
 conda activate maniskill
