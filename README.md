@@ -4,7 +4,7 @@
 
 
 ## Generate the dataset
-Create a conda env ( try python 3.12, otherwise downgrade to 3.10)
+Create a conda env (I am using 3.10, because of some maniskill/tensorflow issues I think.)
 ```
 conda create env -n maniskill
 conda activate maniskill
@@ -30,9 +30,8 @@ python -m mani_skill.examples.demo_random_action -e "ReplicaCAD_SceneManipulatio
 rsync -a --progress /tmp/clevr-act-2.zip /data/lmbraid19/argusm/datasets
 
 # on cluster machin 
-mkdir /tmp/clevr-act-2
-cd /tmp/clevr-act-2
-rsync -a --progress /misc/lmbraid19/argusm/datasets/clevr-act-2.zip .
+cd /tmp
+rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-*.zip .
 
 ```
 
