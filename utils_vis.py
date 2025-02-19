@@ -1,39 +1,40 @@
 import io
 import html
 import base64
+import numpy as np
 import matplotlib.pyplot as plt
-from utils_traj_tokens import decode_caption_xyzrotvec
+from utils_traj_tokens import decode_caption_xyzrotvec2
 from utils_trajectory import DummyCamera
 from PIL import Image
 
-def tokenstr2curve(caption, image_height, image_width):
-    camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
-    camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
-    camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
-    curve_c, _ =  decode_caption_xyzrotvec(caption, camera)
-    return curve_c
 
-def render_example(image, label, prediction=None, text=None):
+
+def render_example(image, label, prediction=None, text=None, camera=None):
     """render examples, for use in notebook:
     
         from IPython.display import display, HTML
         display(HTML(html_imgs))
     """
-    #assert(isinstance(image, (type(Image),)))
-    image_width, image_height = image.size
-
+    if isinstance(image, Image.Image):
+        image_width, image_height = image.size
+    elif isinstance(image, np.ndarray):
+        image_width, image_height, _ = image.shape
+    else:
+        raise ValueError
+        
     plot_width, plot_height = 448, 448
     dpi = 100
     figsize = (plot_width / dpi, plot_height / dpi)
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     ax.imshow(image)
     ax.axis('off')
-    try:
-        curve_25d = tokenstr2curve(label, image_height, image_width)
-        curve_2d = curve_25d[:, :2]
-        ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
-    except ValueError:
-        pass
+    if camera:
+        try:
+            curve_25d, quat_c = decode_caption_xyzrotvec2(label, camera)
+            curve_2d  = curve_25d[:, :2]
+            ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
+        except ValueError:
+            pass
 
     html_text = ""
     if text:
@@ -43,7 +44,7 @@ def render_example(image, label, prediction=None, text=None):
     if prediction:
         html_text += f"</br></br>{html.escape("pred: "+prediction)}"
         try:
-            curve_2d_gt = tokenstr2curve(prediction, image_height, image_width)
+            curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
         except ValueError:
             pass
