@@ -1,41 +1,14 @@
-# CVLA
-
-## General developement setup
+# CVLA Training
 
 
-## Generate the dataset
-Create a conda env (I am using 3.10, because of some maniskill/tensorflow issues I think.)
+## Copying dataset to node
 ```
-conda create env -n maniskill
-conda activate maniskill
-
-cd project_dir/ManiSkill/mani_skill/examples
-python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" 
-python gen_dataset_cleanup.py
-# this generates /tmp/clevr-act-2.zip
-```
-
-### Other simultation envs
-```
-python -m mani_skill.examples.demo_random_action -e "ReplicaCAD_SceneManipulation-v1" \
-  --render-mode="human"
-```
-
-## Training
-
-
-### First start by copying dataset to server
-```
-# on local machine
-rsync -a --progress /tmp/clevr-act-2.zip /data/lmbraid19/argusm/datasets
-
 # on cluster machin 
 cd /tmp
 rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-*.zip .
-
 ```
 
-### Running training
+## Running training
 
 Create a conda env (python version 3.12 because of tensorboard)
 ```
@@ -49,12 +22,18 @@ conda create env -n paligemma python=3.12
 3. Run `./cVLA/finetune_paligemma_robotflow.ipynb`
 
 
-### Running motion planning
+## Running motion planning
 
 ```
 conda activate maniskill
 cd project_dir/ManiSkill/mani_skill/examples
 python gen_dataset.py -e "ClevrMove-v1"   --render-mode="rgb_array" -c "pd_joint_pos"
-
 python -m mani_skill.examples.motionplanning.panda.run --env-id ClevrMove-v1 --traj-name="trajectory" --only-count-success --save-video -n 1
 ```
+
+
+## Dataset Creation
+
+See the ManiSkill repo, ManiSkill/mani_skill/examples/README_cvla.md. 
+
+

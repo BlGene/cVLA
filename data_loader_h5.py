@@ -1,6 +1,9 @@
+import glob
 import h5py
+from pathlib import Path
 import torch
 import numpy as np
+from PIL import Image
 from matplotlib.cm import viridis
 from mani_skill.utils.structs import Pose
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
@@ -20,7 +23,17 @@ def depth_as_color(depth_image, depth_min=0, depth_max=1023):
     return depth_rgb
     
 class H5Dataset(Dataset):
-    def __init__(self, h5_file_path, return_depth=False):
+    def __init__(self, h5_file_or_dir, return_depth=False):
+        h5_file_or_dir = Path(h5_file_or_dir)
+        if h5_file_or_dir.is_dir():
+            h5_files = sorted(glob.glob(f"{h5_file_or_dir}/*.h5"))
+            h5_file_path = Path(h5_file_or_dir) / h5_files[-1]
+            if len(h5_files) > 1:
+                print(f"Warning, multiple h5 files, choosing {h5_file_path}")
+        elif h5_file_or_dir.is_file():
+            h5_file_path = h5_file_or_dir
+        else:
+            raise ValueError(f"dataset neither file nor dir: {h5_file_or_dir}")
         self.h5_file = h5py.File(h5_file_path, "r")
         self.return_depth = return_depth
         
@@ -38,12 +51,12 @@ class H5Dataset(Dataset):
             if x.startswith("action_text_"):
                 action_text = str(x).replace("action_text_", "")
             
-        obj_start = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_start"]))
-        obj_end = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_end"]))
-        grasp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/grasp_pose"]))
-        tcp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/tcp_pose"]))
-        camera_intrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/intrinsic_cv"]
-        camera_extrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/extrinsic_cv"]
+        obj_start = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_start"][:]))
+        obj_end = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_end"][:]))
+        grasp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/grasp_pose"][:]))
+        tcp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/tcp_pose"][:]))
+        camera_intrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/intrinsic_cv"][:]
+        camera_extrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/extrinsic_cv"][:]
         width, height, c = image.shape
         camera = DummyCamera(camera_intrinsic, camera_extrinsic, width, height)
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
@@ -56,4 +69,4 @@ class H5Dataset(Dataset):
             depth_image = depth_as_color(depth)
             return [image, depth_image], entry
         
-        return image, entry
+        return Image.fromarray(image), entry
