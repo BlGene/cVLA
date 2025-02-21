@@ -4,12 +4,13 @@ from PIL import Image
 from torch.utils.data import Dataset
 from pathlib import Path
 from typing import Optional
+from utils_trajectory import DummyCamera
 
 def clean_prompt(prompt_text):
     return prompt_text.lower().replace("\n","").replace(".","").replace("  "," ")
 
 class JSONLDataset(Dataset):
-    def __init__(self, jsonl_file_path: str, image_directory_path=None, clean_prompt=True):
+    def __init__(self, jsonl_file_path: str, image_directory_path=None, clean_prompt=True, return_camera=True):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
             dataset_path = jsonl_file_path.parent
@@ -25,6 +26,7 @@ class JSONLDataset(Dataset):
         self.image_directory_path = image_directory_path
         self.entries = self._load_entries()
         self.clean_promt = clean_prompt
+        self.return_camera = return_camera
 
     def _load_entries(self):
         entries = []
@@ -44,7 +46,15 @@ class JSONLDataset(Dataset):
         entry = self.entries[idx]
         if self.clean_promt:
             entry["prefix"] = clean_prompt(entry["prefix"])
-            
+
         image_path = os.path.join(self.image_directory_path, entry['image'])
         image = Image.open(image_path)
+
+        if self.return_camera:
+            image_width, image_height = image.size
+            camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
+            camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
+            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
+            entry["camera"] = camera
+        
         return image, entry
