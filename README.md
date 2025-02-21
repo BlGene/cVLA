@@ -32,6 +32,15 @@ python -m mani_skill.examples.motionplanning.panda.run --env-id ClevrMove-v1 --t
 ```
 
 
+## Cluster
+
+ssh kislogin3.rz.ki.privat
+srun -p lmbdlc2_gpu-l40s --gpus-per-node=1 --mem=40G --time=3:00:00 --pty bash --nodelist=dlc2gpu08
+conda activate paligemma
+rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-7-depth /tmp/
+cd /ihome/argusm/lang/cVLA/
+ssh -L 8889:localhost:8888 argusm@dlc2gpu08
+
 ## Dataset Creation
 
 See the ManiSkill repo, ManiSkill/mani_skill/examples/README_cvla.md. 

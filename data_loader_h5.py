@@ -23,7 +23,7 @@ def depth_as_color(depth_image, depth_min=0, depth_max=1023):
     return depth_rgb
     
 class H5Dataset(Dataset):
-    def __init__(self, h5_file_or_dir, return_depth=False):
+    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None):
         h5_file_or_dir = Path(h5_file_or_dir)
         if h5_file_or_dir.is_dir():
             h5_files = sorted(glob.glob(f"{h5_file_or_dir}/*.h5"))
@@ -37,14 +37,17 @@ class H5Dataset(Dataset):
         self.h5_file = h5py.File(h5_file_path, "r")
         self.return_depth = return_depth
         
+        self.h5_file_len = len(self.h5_file)
+
+        self.augment_rgb = augment_rgb
+        self.augment_rgbds = augment_rgbds
+
     def __len__(self):
-        return len(self.h5_file)
+        return self.h5_file_len
 
     def __getitem__(self, idx: int):
         if idx < 0 or idx >= len(self):
             raise IndexError("Index out of range")
-        
-        image = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/rgb'][0]
         
         action_text = None
         for x in self.h5_file[f'traj_{idx}/obs/extra'].keys():
@@ -57,6 +60,8 @@ class H5Dataset(Dataset):
         tcp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/tcp_pose"][:]))
         camera_intrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/intrinsic_cv"][:]
         camera_extrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/extrinsic_cv"][:]
+        
+        image = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/rgb'][0]
         width, height, c = image.shape
         camera = DummyCamera(camera_intrinsic, camera_extrinsic, width, height)
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
@@ -64,9 +69,20 @@ class H5Dataset(Dataset):
                                                                        action_text, enc_func, robot_pose=None)
         entry = dict(prefix=prefix, suffix=token_str, camera=camera)
 
-        if self.return_depth:
+        depth = None
+        seg = None
+        if self.augment_rgbds is not None:
             depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
+            seg = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/segmentation'][0]
+            image = self.augment_rgbds(image, depth, seg)
+
+        if self.augment_rgb is not None:
+            image = self.augment_rgb(image)
+
+        if self.return_depth:
+            if depth is None:
+                depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
             depth_image = depth_as_color(depth)
             return [image, depth_image], entry
-        
+
         return Image.fromarray(image), entry
