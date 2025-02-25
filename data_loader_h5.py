@@ -83,6 +83,6 @@ class H5Dataset(Dataset):
             if depth is None:
                 depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
             depth_image = depth_as_color(depth)
-            return [image, depth_image], entry
+            return [depth_image, image], entry
 
         return Image.fromarray(image), entry

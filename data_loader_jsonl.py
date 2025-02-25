@@ -3,21 +3,20 @@ import json
 from PIL import Image
 from torch.utils.data import Dataset
 from pathlib import Path
-from typing import Optional
 from utils_trajectory import DummyCamera
 
 def clean_prompt(prompt_text):
     return prompt_text.lower().replace("\n","").replace(".","").replace("  "," ")
 
 class JSONLDataset(Dataset):
-    def __init__(self, jsonl_file_path: str, image_directory_path=None, clean_prompt=True, return_camera=True):
+    def __init__(self, jsonl_file_path: str, image_directory_path=None,  return_camera=True, augment_rgb=None, clean_prompt=True, augment_text=None):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
             dataset_path = jsonl_file_path.parent
             jsonl_file_path = jsonl_file_path
         elif jsonl_file_path.is_dir():
             dataset_path = jsonl_file_path
-            jsonl_file_path = jsonl_file_path / "_annotations_train.jsonl"
+            jsonl_file_path = jsonl_file_path / "_annotations.valid.jsonl"
         else:
             raise ValueError(f"didn't find {jsonl_file_path}")
         if image_directory_path is None:
@@ -27,6 +26,14 @@ class JSONLDataset(Dataset):
         self.entries = self._load_entries()
         self.clean_promt = clean_prompt
         self.return_camera = return_camera
+        self.augment_rgb = augment_rgb
+        self.augment_text = augment_text
+
+        # TODO(maxim):
+        # if self.return_camera:
+        #    load _annotations.all.jsonl -> get camera 
+        #    dict[index] -> camera
+
 
     def _load_entries(self):
         entries = []
@@ -44,8 +51,6 @@ class JSONLDataset(Dataset):
             raise IndexError("Index out of range")
         
         entry = self.entries[idx]
-        if self.clean_promt:
-            entry["prefix"] = clean_prompt(entry["prefix"])
 
         image_path = os.path.join(self.image_directory_path, entry['image'])
         image = Image.open(image_path)
@@ -57,4 +62,13 @@ class JSONLDataset(Dataset):
             camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
             entry["camera"] = camera
         
+        if self.augment_rgb is not None:
+            image = self.augment_rgb(image)
+
+        if self.clean_promt:
+            entry["prefix"] = clean_prompt(entry["prefix"])
+
+        if self.augment_text:
+            entry["prefix"] = self.augment_text(entry["prefix"])
+
         return image, entry

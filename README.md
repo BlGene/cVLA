@@ -37,9 +37,12 @@ python -m mani_skill.examples.motionplanning.panda.run --env-id ClevrMove-v1 --t
 ssh kislogin3.rz.ki.privat
 srun -p lmbdlc2_gpu-l40s --gpus-per-node=1 --mem=40G --time=3:00:00 --pty bash --nodelist=dlc2gpu08
 conda activate paligemma
-rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-7-depth /tmp/
 cd /ihome/argusm/lang/cVLA/
-ssh -L 8889:localhost:8888 argusm@dlc2gpu08
+jupyter-lab hf_finetune_paligemma2-l40.ipynb
+# copy files in notebook not, ssh.
+rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-real-1of5c-v1 /tmp/
+rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-7-depth /tmp/
+ssh -L 8890:localhost:8888 argusm@dlc2gpu08  # ssh -L local_port:remote_host:remote_port user@remote_server
 
 ## Dataset Creation
 

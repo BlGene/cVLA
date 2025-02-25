@@ -8,6 +8,11 @@ from utils_trajectory import DummyCamera
 from PIL import Image
 
 
+def get_standard_camera(image_height, image_width):
+    camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
+    camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
+    camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
+    return camera
 
 def render_example(image, label, prediction=None, text=None, camera=None):
     """render examples, for use in notebook:
@@ -21,6 +26,9 @@ def render_example(image, label, prediction=None, text=None, camera=None):
         image_width, image_height, _ = image.shape
     else:
         raise ValueError
+        
+    if camera is None:
+        camera = get_standard_camera(image_width, image_height)
         
     plot_width, plot_height = 448, 448
     dpi = 100
