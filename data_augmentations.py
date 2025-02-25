@@ -37,7 +37,8 @@ class RandomizeBackgrounds:
         if isinstance(background_images, (str, Path)):
             self.background_images = glob.glob(os.path.join(background_images, "**", "*.jpg"), recursive=True)
             print("Number of bg images:", len(self.background_images))
-
+            if len(self.background_images) == 0:
+                raise ValueError(f"No backgound images found in path {background_images}")
         
         elif isinstance(background_images, Dataset):
             self.background_images = background_images
@@ -94,4 +95,23 @@ clevr_move_replacement_dict = {
 pattern = re.compile(r'\b(' + '|'.join(map(re.escape, clevr_move_replacement_dict.keys())) + r')\b')
 def simplyify_text(text):
     return pattern.sub(lambda match: clevr_move_replacement_dict[match.group(0)], text)
+
+real_block_sent = {'put the {} in the {}': 92, 'put the {} inside the {}': 30, 'place the {} inside the {}': 13,
+                   'pick the {} and put it in the {}': 7, 'pick up the {} and put it in the {}': 7, 'put the {} into the {}': 5,
+                   'place the {} in the {}': 3, 'pick up the {} and put it inside the {}': 1, 'put the {} inside {}': 1,
+                   'get the {} and place it in the {}': 1}
+
+real_block_word = {'cube': {'block': 118, 'cube': 21, 'box': 2}}
+
+def complexify_text(text):
+    _, size_1, color_1, shape_1, _, size_2, color_2, shape_2 = text.strip().split(" ")
+    sampled_key = random.choices(list(real_block_sent.keys()), weights=list(real_block_sent.values()))[0]
+    if shape_1 in real_block_word:
+        shape_1 = random.choices(list(real_block_word[shape_1].keys()), weights=list(real_block_word[shape_1].values()))[0]
+    if shape_2 in real_block_word:
+        shape_2 = random.choices(list(real_block_word[shape_2].keys()), weights=list(real_block_word[shape_2].values()))[0]
+    object_name = " ".join((size_1, color_1, shape_1))
+    container_name = " ".join((size_2, color_2, shape_2))
+    new_text = sampled_key.format(object_name, container_name)
+    return new_text
 

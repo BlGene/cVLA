@@ -15,6 +15,10 @@ enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 
 
 def depth_as_color(depth_image, depth_min=0, depth_max=1023):
+    """
+    Arguments:
+        depth_image: in [mm]
+    """
     # Normalize the data to the range [0, 1]
     assert depth_image.ndim == 3
     assert depth_image.shape[2] == 1
@@ -23,7 +27,10 @@ def depth_as_color(depth_image, depth_min=0, depth_max=1023):
     return depth_rgb
     
 class H5Dataset(Dataset):
-    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None):
+    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None):
+        """
+        The augment functions are applied in order same order as the order of arguments.
+        """
         h5_file_or_dir = Path(h5_file_or_dir)
         if h5_file_or_dir.is_dir():
             h5_files = sorted(glob.glob(f"{h5_file_or_dir}/*.h5"))
@@ -41,6 +48,7 @@ class H5Dataset(Dataset):
 
         self.augment_rgb = augment_rgb
         self.augment_rgbds = augment_rgbds
+        self.augment_text = augment_text
 
     def __len__(self):
         return self.h5_file_len
@@ -64,6 +72,10 @@ class H5Dataset(Dataset):
         image = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/rgb'][0]
         width, height, c = image.shape
         camera = DummyCamera(camera_intrinsic, camera_extrinsic, width, height)
+
+        if self.augment_text is not None:
+            action_text = self.augment_text(action_text)
+
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                        camera, grasp_pose, tcp_pose,
                                                                        action_text, enc_func, robot_pose=None)
@@ -84,5 +96,5 @@ class H5Dataset(Dataset):
                 depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
             depth_image = depth_as_color(depth)
             return [depth_image, image], entry
-
+        
         return Image.fromarray(image), entry
