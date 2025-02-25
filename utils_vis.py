@@ -25,7 +25,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     elif isinstance(image, np.ndarray):
         image_width, image_height, _ = image.shape
     else:
-        raise ValueError
+        raise ValueError(f"image was {type(image)}")
         
     if camera is None:
         camera = get_standard_camera(image_width, image_height)
@@ -46,11 +46,11 @@ def render_example(image, label, prediction=None, text=None, camera=None):
 
     html_text = ""
     if text:
-       html_text = f"{html.escape("text: "+text)}"
-    html_text += f"</br></br>{html.escape("label: "+label)}"
+       html_text = f'{html.escape("text: "+text)}'
+    html_text += f'</br></br>{html.escape("label: "+label)}'
 
     if prediction:
-        html_text += f"</br></br>{html.escape("pred: "+prediction)}"
+        html_text += f'</br></br>{html.escape("pred: "+prediction)}'
         try:
             curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
@@ -68,4 +68,3 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     <p style="width:256px; margin:10px; font-size:small;">{html_text}</p>
 </div>
 """
-
