@@ -2,32 +2,19 @@ import glob
 import h5py
 from pathlib import Path
 import torch
-import numpy as np
 from PIL import Image
-from matplotlib.cm import viridis
 from mani_skill.utils.structs import Pose
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
 from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
 from utils_trajectory import DummyCamera
 from torch.utils.data import Dataset
+from data_augmentations import depth_to_color
 
 enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 
 
-def depth_as_color(depth_image, depth_min=0, depth_max=1023):
-    """
-    Arguments:
-        depth_image: in [mm]
-    """
-    # Normalize the data to the range [0, 1]
-    assert depth_image.ndim == 3
-    assert depth_image.shape[2] == 1
-    depth_norm = (np.clip(depth_image[:,:,0], depth_min, depth_max) - depth_min ) / (depth_max-depth_min)
-    depth_rgb = viridis(depth_norm)[:, :, :3]
-    return depth_rgb
-    
 class H5Dataset(Dataset):
-    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None):
+    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None, depth_to_color=True):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -49,6 +36,7 @@ class H5Dataset(Dataset):
         self.augment_rgb = augment_rgb
         self.augment_rgbds = augment_rgbds
         self.augment_text = augment_text
+        self.depth_to_color = depth_to_color
 
     def __len__(self):
         return self.h5_file_len
@@ -94,7 +82,10 @@ class H5Dataset(Dataset):
         if self.return_depth:
             if depth is None:
                 depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
-            depth_image = depth_as_color(depth)
-            return [depth_image, image], entry
+            if self.depth_to_color:
+                depth = depth_to_color(depth)
+            else:
+                depth = depth[:,:,0]
+            return [depth, image], entry
         
         return Image.fromarray(image), entry

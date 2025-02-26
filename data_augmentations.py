@@ -70,7 +70,70 @@ class RandomizeBackgrounds:
         image_aug = image.copy()  # Create a copy to preserve the original
         image_aug[seg_mask] = random_image[seg_mask]
         return image_aug
+
+# Depth Stuff ----------------------------------------------------------
+from matplotlib.cm import viridis
+
+def depth_to_norm(depth_image, depth_min=0, depth_max=1023):
+    depth_norm = (np.clip(depth_image, depth_min, depth_max) - depth_min ) / (depth_max-depth_min)
+    return depth_norm
+
+def norm_to_depth(norm_image, depth_min=0, depth_max=1023):
+    depth = norm_image * (depth_max-depth_min) + depth_min
+    return depth
+
+class ViridisToNorm:
+    def __init__(self):
+        viridis_values = np.linspace(0, 1, len(viridis.colors))
+        # Create LUT dictionary mapping RGB -> value
+        self.viridis_lut = {tuple(rgb[:3]): value for rgb, value in zip(viridis.colors, viridis_values)}  # Disel: only the brave.
+        #self.viridis_lut = {rgb_to_key(rgb[:3]): value for rgb, value in zip(viridis.colors, viridis_values)}
+        
+    def __call__(self, array):
+        if isinstance(array, np.ndarray):
+            old_shape = array.shape
+            recovered_flat = np.array([self.viridis_lut.get(tuple(color), 0) for color in array.reshape(-1, 3)])
+            return recovered_flat.reshape(old_shape[:-1])
+        elif isinstance(array, tuple):
+            return self.viridis_lut.get(array, 0)
+        else:
+            raise ValueError
+        
+    def color_to_depth(self, depth_as_color):
+        assert depth_as_color.ndim == 3
+        assert depth_as_color.shape[2] == 3
+            
+        norm_image = self.__call__(depth_as_color)
+        depth_image = norm_to_depth(norm_image)
+        return depth_image
     
+    # def rgb_to_key(rgb, precision=3):
+    #         return tuple(np.round(rgb, precision))  # Round for consistent lookup
+
+color_to_norm = ViridisToNorm()
+norm_to_color = lambda norm: viridis(norm)[:,:, :3] ## should take (w,h) not (w,h,1)
+
+color_to_depth = color_to_norm.color_to_depth
+def depth_to_color(depth_image):
+    """
+    Arguments:
+        depth_image: in [mm]
+    """
+    assert depth_image.ndim == 3
+    assert depth_image.shape[2] == 1
+    # Normalize the data to the range [0, 1]
+    depth_norm = depth_to_norm(depth_image=depth_image)
+    depth_rgb = viridis(depth_norm[:, :, 0])[:, :, :3]
+    return depth_rgb
+
+def test_norm_color_pingpoing():
+    random_array = np.random.rand(4, 4)
+    viridis_mapped = norm_to_color(random_array)
+    recovered_array = color_to_norm(viridis_mapped)
+    assert np.all(np.isclose(random_array, recovered_array, atol=.01))
+
+
+
 
 # Text ----------------------------------------------------------
 
@@ -101,7 +164,7 @@ real_block_sent = {'put the {} in the {}': 92, 'put the {} inside the {}': 30, '
                    'place the {} in the {}': 3, 'pick up the {} and put it inside the {}': 1, 'put the {} inside {}': 1,
                    'get the {} and place it in the {}': 1}
 
-real_block_word = {'cube': {'block': 118, 'cube': 21, 'box': 2}}
+real_block_word = {'cube': {'block': 118, 'cube': 21, 'box': 2},'sphere': {'sphere': 50, 'ball': 50}}
 
 def complexify_text(text):
     _, size_1, color_1, shape_1, _, size_2, color_2, shape_2 = text.strip().split(" ")
@@ -115,3 +178,6 @@ def complexify_text(text):
     new_text = sampled_key.format(object_name, container_name)
     return new_text
 
+
+if __name__ == "__main__":
+    test_norm_color_pingpoing()
