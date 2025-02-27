@@ -24,7 +24,7 @@ class JSONLDataset(Dataset):
             image_directory_path = Path(dataset_path) / "dataset"
         self.jsonl_file_path = jsonl_file_path
         self.image_directory_path = image_directory_path
-        self.entries = self._load_entries()
+        self.entries = self._load_entries(jsonl_file_path)
         self.clean_promt = clean_prompt
         self.return_camera = return_camera
         self.augment_rgb = augment_rgb
@@ -32,10 +32,9 @@ class JSONLDataset(Dataset):
         self.return_depth = return_depth
         self.depth_to_color = depth_to_color
 
-        # TODO(maxim):
-        # if self.return_camera:
-        #    load _annotations.all.jsonl -> get camera 
-        #    dict[index] -> camera
+        if self.return_camera:
+            jsonl_all_path = Path(dataset_path) / "_annotations.all.jsonl"
+            self.all_entries = self._load_entries(jsonl_all_path)
 
 
     def _load_entries(self):
@@ -60,8 +59,11 @@ class JSONLDataset(Dataset):
 
         if self.return_camera:
             image_width, image_height = image.size
-            camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
-            camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
+            all_entry = self.all_entries[idx]
+            #camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
+            #camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
+            camera_extrinsic = all_entry["camera_extrinsic"]
+            camera_intrinsic = all_entry["camera_intrinsic"]
             camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
             entry["camera"] = camera
         
