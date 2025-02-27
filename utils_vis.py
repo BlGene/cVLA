@@ -51,6 +51,52 @@ def transform_3d(point_3d: np.ndarray, mat: np.ndarray):
     res = res / res[3] # remove homogeneous coordinate
     return res[:3]
 
+def draw_coordinate_frame(label, camera, ax):
+    # === draw axis frame
+    # curve shape (B, N, X Y Z) in camera 3D space
+    # quat shape (B, N, qw qx qy qz)
+    curve_w, quat_w = decode_trajectory_xyzrotvec2(label, camera)
+
+    # coordinate frame
+    dist = 0.1
+    c = np.array([0, 0, 0])
+    x = np.array([dist, 0, 0])
+    y = np.array([0, dist, 0])
+    z = np.array([0, 0, dist])
+
+    # get transform from TCP coors to camera 3D
+    pose = np.array([
+        curve_w[0, 0, 0], # x
+        curve_w[0, 0, 1], # y
+        curve_w[0, 0, 2], # z
+        quat_w[0, 0, 0], # qw
+        quat_w[0, 0, 1], # qx
+        quat_w[0, 0, 2], # qy
+        quat_w[0, 0, 3] # qz
+    ])
+    t, rot = extract_extrinsics(pose) # (3), (3, 3)
+    tcp_transform = local_to_world(t, rot) # (4, 4)
+
+    # apply 3D transform
+    c = transform_3d(c, tcp_transform) # (xyz)
+    x = transform_3d(x, tcp_transform)
+    y = transform_3d(y, tcp_transform)
+    z = transform_3d(z, tcp_transform)
+
+    # project with intrinsic
+    points_3d = np.stack((c, x, y, z))[None, :, :] # (xyz) -> (1, 4, xyz)
+    points_2d = project_points(camera, convert_to_tensor(points_3d))
+    points_2d = points_2d[0, :, :2]
+
+    c = points_2d[0]
+    x = points_2d[1]
+    y = points_2d[2]
+    z = points_2d[3]
+    ax.plot((c[0], x[0]), (c[1], x[1]), '.-', color='red')
+    ax.plot((c[0], y[0]), (c[1], y[1]), '.-', color='green')
+    ax.plot((c[0], z[0]), (c[1], z[1]), '.-', color='blue')
+
+
 
 def render_example(image, label, prediction=None, text=None, camera=None):
     """render examples, for use in notebook:
@@ -76,55 +122,9 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     ax.axis('off')
     if camera:
         try:
-            # Pixels + depth
-            # curve shape (N points, u v d), quaternion shape (N, qw qx qy qz)
             curve_25d, quat_c = decode_caption_xyzrotvec2(label, camera) 
             curve_2d  = curve_25d[:, :2]
             ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
-
-            # === draw axis frame
-            # curve shape (B, N, X Y Z) in camera 3D space
-            # quat shape (B, N, qw qx qy qz)
-            curve_w, quat_w = decode_trajectory_xyzrotvec2(label, camera)
-
-            # coordinate frame
-            dist = 0.1
-            c = np.array([0, 0, 0])
-            x = np.array([dist, 0, 0])
-            y = np.array([0, dist, 0])
-            z = np.array([0, 0, dist])
-
-            # get transform from TCP coors to camera 3D
-            pose = np.array([
-                curve_w[0, 0, 0], # x
-                curve_w[0, 0, 1], # y
-                curve_w[0, 0, 2], # z
-                quat_w[0, 0, 0], # qw
-                quat_w[0, 0, 1], # qx
-                quat_w[0, 0, 2], # qy
-                quat_w[0, 0, 3] # qz
-            ])
-            t, rot = extract_extrinsics(pose) # (3), (3, 3)
-            tcp_transform = local_to_world(t, rot) # (4, 4)
-
-            # apply 3D transform
-            c = transform_3d(c, tcp_transform) # (xyz)
-            x = transform_3d(x, tcp_transform)
-            y = transform_3d(y, tcp_transform)
-            z = transform_3d(z, tcp_transform)
-
-            # project with intrinsic
-            points_3d = np.stack((c, x, y, z))[None, :, :] # (xyz) -> (1, 4, xyz)
-            points_2d = project_points(camera, convert_to_tensor(points_3d))
-            points_2d = points_2d[0, :, :2]
-
-            c = points_2d[0]
-            x = points_2d[1]
-            y = points_2d[2]
-            z = points_2d[3]
-            ax.plot((c[0], x[0]), (c[1], x[1]), '.-', color='red')
-            ax.plot((c[0], y[0]), (c[1], y[1]), '.-', color='green')
-            ax.plot((c[0], z[0]), (c[1], z[1]), '.-', color='blue')
         except ValueError:
             pass
 
@@ -138,6 +138,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
         try:
             curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
+            draw_coordinate_frame(prediction, camera, ax)
         except ValueError:
             pass
 
