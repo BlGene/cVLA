@@ -37,9 +37,9 @@ class JSONLDataset(Dataset):
             self.all_entries = self._load_entries(jsonl_all_path)
 
 
-    def _load_entries(self):
+    def _load_entries(self, json_path: str):
         entries = []
-        with open(self.jsonl_file_path, 'r') as file:
+        with open(json_path, 'r') as file:
             for line in file:
                 data = json.loads(line)
                 entries.append(data)
