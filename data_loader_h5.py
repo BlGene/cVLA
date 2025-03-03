@@ -3,6 +3,7 @@ import h5py
 from pathlib import Path
 import torch
 from PIL import Image
+import numpy as np
 from mani_skill.utils.structs import Pose
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
 from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
@@ -14,7 +15,7 @@ enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 
 
 class H5Dataset(Dataset):
-    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None, depth_to_color=True):
+    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, depth_to_color=True):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -36,6 +37,7 @@ class H5Dataset(Dataset):
         self.augment_rgb = augment_rgb
         self.augment_rgbds = augment_rgbds
         self.augment_text = augment_text
+        self.augment_depth = augment_depth
         self.depth_to_color = depth_to_color
 
     def __len__(self):
@@ -73,6 +75,7 @@ class H5Dataset(Dataset):
         seg = None
         if self.augment_rgbds is not None:
             depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
+            depth = np.clip(depth, 0, 1023)
             seg = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/segmentation'][0]
             image = self.augment_rgbds(image, depth, seg)
 
@@ -81,11 +84,17 @@ class H5Dataset(Dataset):
 
         if self.return_depth:
             if depth is None:
-                depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
+                depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0][:,:,0]
+                depth = np.clip(depth, 0, 1023)
+
+            if self.augment_depth is not  None:
+                depth, suffix = self.augment_depth(depth, entry["suffix"])
+                entry["suffix"] = suffix
+            
             if self.depth_to_color:
                 depth = depth_to_color(depth)
-            else:
-                depth = depth[:,:,0]
+            #else:
+            #    depth = depth[:,:,0]
             return [depth, image], entry
         
         return Image.fromarray(image), entry
