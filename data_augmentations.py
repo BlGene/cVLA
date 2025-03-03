@@ -7,6 +7,7 @@ import random
 import torch
 import torchvision.transforms
 from torchvision.transforms import Compose, Normalize
+from torchvision.transforms import v2
 from torch.utils.data import Dataset
 import re
 
@@ -179,5 +180,94 @@ def complexify_text(text):
     return new_text
 
 
+
+# Crop ----------------------------------------------------------
+
+def obj_start_crop(image: Image, suffix: str, size=None):
+    """
+    Arguments:
+        image: PIL.Image (h w c)
+        suffix (12) = obj_start (h w d rv0 rv1 rv2), obj_end (h w d rv0 rv1 rv2)
+        size: int, total width of crop
+
+    Crop image around object start position,
+    shift coor center to crop center and set crop size as maximum coor.
+    """
+
+    image_width, image_height = image.size[:2]
+
+    # convert string tokens to int
+    # depth in cm, x and y in [0, 1023]
+    loc_strings = [int(x) for x in re.findall(r"<(?:loc|seg)(\d+)>", suffix)]
+    loc_strings = np.array(loc_strings)
+    loc_strings = loc_strings.reshape(-1, 6)
+
+    # go from maniskill (1024, 1024) to (image_height, image_width)
+    loc_h = (loc_strings[:, 0]/(1024-1)*image_height).round().astype(int) # (obj_start_x obj_end_x)
+    loc_w = (loc_strings[:, 1]/(1024-1)*image_width).round().astype(int)
+
+    # Image crop at obj_start
+    crop_size = image_width // 3
+    if size is not None:
+        crop_size = size
+    top = loc_h[0]-crop_size//2
+    left = loc_w[0]-crop_size//2
+    box = (top, left, crop_size, crop_size) # yxhw
+    crop = v2.functional.crop(image, *box)
+
+    # add delta to y x, go from (image_height, image_width) to maniskill (1024, 1024)
+    loc_strings[:, 0] = ((loc_h - top)/crop_size*(1024-1)).round().astype(int)
+    loc_strings[:, 1] = ((loc_w - left)/crop_size*(1024-1)).round().astype(int)
+
+    suffix_new = ""
+    for x in loc_strings:
+        suffix_new += "<loc{a[0]:04d}><loc{a[1]:04d}><loc{a[2]:04d}><seg{a[3]:03d}><seg{a[4]:03d}><seg{a[5]:03d}>".format(a=x)
+
+    return crop, suffix_new
+
+
+def test_obj_start_crop():
+    """
+    Test:
+    1. np array (10, 10) -> PIL image
+    2. define suffix string
+    3. check crop size, crop contents, new suffix
+    """
+
+    a = np.zeros((10, 10))
+    a[:5, :5] = 1
+    image = Image.fromarray(a)
+    suffix = "<loc0500><loc0><loc0><seg0><seg0><seg0>  <loc0800><loc0400><loc0><seg0><seg0><seg0>" 
+    # begin = (5, 0)
+    # end = (8, 4)
+    # ..vvv |
+    # ..vvv |
+    # ..B.. |
+    # ..... |
+    # ..... |
+    # ------E
+    crop, suffix = obj_start_crop(image, suffix, 5)
+    assert crop.size == (5, 5)
+    assert np.allclose(crop, np.array([
+        [0., 0., 1., 1., 1.],
+        [0., 0., 1., 1., 1.],
+        [0., 0., 0., 0., 0.], # y=5, x=0
+        [0., 0., 0., 0., 0.],
+        [0., 0., 0., 0., 0.],
+    ]))
+
+    loc_strings = [int(x) for x in re.findall(r"<(?:loc|seg)(\d+)>", suffix)]
+    loc_strings = np.array(loc_strings)
+    loc_strings = loc_strings.reshape(-1, 6)
+
+    # go from maniskill (1024, 1024) to ((0, 1), (0, 1))
+    loc_h = loc_strings[:, 0]/(1024-1) # (obj_start_x obj_end_x)
+    loc_w = loc_strings[:, 1]/(1024-1)
+
+    assert np.allclose(loc_h, np.array([0.5, 1.0]), atol=0.2) # (start_y, end_y)
+    assert np.allclose(loc_w, np.array([0.5, 1.2]), atol=0.2) # (start_x, end_x)
+
+
 if __name__ == "__main__":
     test_norm_color_pingpoing()
+    test_obj_start_crop()
