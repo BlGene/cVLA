@@ -11,7 +11,7 @@ def clean_prompt(prompt_text):
 
 class JSONLDataset(Dataset):
     def __init__(self, jsonl_file_path: str, image_directory_path=None, return_depth=False, return_camera=True, 
-                 augment_rgb=None, clean_prompt=True, augment_text=None, depth_to_color=True, augment_crop=None,
+                 augment_rgb=None, clean_prompt=True, augment_text=None, augment_depth=None, depth_to_color=True, augment_crop=None,
                  crop_size=500):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
@@ -31,6 +31,7 @@ class JSONLDataset(Dataset):
         self.return_camera = return_camera
         self.augment_rgb = augment_rgb
         self.augment_text = augment_text
+        self.augment_depth = augment_depth
         self.return_depth = return_depth
         self.depth_to_color = depth_to_color
         self.augment_crop = augment_crop
@@ -78,6 +79,19 @@ class JSONLDataset(Dataset):
         if self.return_camera:
             image_width, image_height = image.size # must be after crop
             all_entry = self.all_entries[idx]
+            camera_extrinsic = all_entry["camera_extrinsic"]
+            camera_intrinsic = all_entry["camera_intrinsic"]
+            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
+            entry["camera"] = camera
+
+        if self.augment_crop:
+            # Achtung! Incompatible with depth!
+            # Suffix was encoded with original image size, must be decoded also with original.
+            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], size=self.crop_size)
+        
+        if self.return_camera:
+            image_width, image_height = image.size # must be after crop
+            all_entry = self.all_entries[idx]
             #camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
             #camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
             camera_extrinsic = all_entry["camera_extrinsic"]
@@ -90,13 +104,16 @@ class JSONLDataset(Dataset):
             depth_path = os.path.join(self.image_directory_path, entry['image'].replace("_first.jpg", "_depth0.png"))
             depth_xs = Image.open(depth_path)
             depth_xs = np.array(depth_xs)
-            depth_xs[depth_xs==65535] = 0
-            scaling_png_to_mm = 3 / 65535 * 1000
+            depth_xs[depth_xs==3000] = 0
+            #scaling_png_to_mm = 3 / 65535 * 1000  # for real exports v1 and v2
+            scaling_png_to_mm = 1
             depth_mm = depth_xs * scaling_png_to_mm
+            if self.augment_depth is not None:
+                depth_mm, suffix = self.augment_depth(depth_mm, entry["suffix"])
+                entry["suffix"] = suffix
             if self.depth_to_color:
-                depth_mm = depth_to_color(np.expand_dims(depth_mm, axis=2))
+                depth_mm = depth_to_color(depth_mm)
             return (depth_mm, image), entry
-
         return image, entry
 
 class ValidDataset:

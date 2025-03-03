@@ -72,7 +72,7 @@ class RandomizeBackgrounds:
         image_aug[seg_mask] = random_image[seg_mask]
         return image_aug
 
-# Depth Stuff ----------------------------------------------------------
+# Depth To Image Stuff  ----------------------------------------------------------
 from matplotlib.cm import viridis
 
 def depth_to_norm(depth_image, depth_min=0, depth_max=1023):
@@ -120,11 +120,10 @@ def depth_to_color(depth_image):
     Arguments:
         depth_image: in [mm]
     """
-    assert depth_image.ndim == 3
-    assert depth_image.shape[2] == 1
+    assert depth_image.ndim == 2
     # Normalize the data to the range [0, 1]
     depth_norm = depth_to_norm(depth_image=depth_image)
-    depth_rgb = viridis(depth_norm[:, :, 0])[:, :, :3]
+    depth_rgb = viridis(depth_norm)[:, :, :3]
     return depth_rgb
 
 def test_norm_color_pingpoing():
@@ -134,9 +133,57 @@ def test_norm_color_pingpoing():
     assert np.all(np.isclose(random_array, recovered_array, atol=.01))
 
 
+# Depth Augmentation --------------------------------------------------------
+class DepthAugmentation:
+    def __init__(self):
+        self.depth_range = (25, 100)
+        self.delta_depth_max = 35
+        
+    def __call__(self, depth_image_mm, suffix):
+        """
+        Arguments:
+            depth_image_mm: depth image in [mm]
+            suffix: encoded trajectory
+        """
+        loc_strings = [int(x) for x in re.findall(r"<(?:loc|seg)(\d+)>", suffix)]
+        loc_strings = np.array(loc_strings)
+        try:
+            loc_strings = loc_strings.reshape(-1, 6)
+        except ValueError as e:
+            print(suffix, loc_strings)
+            raise e
+        depth_vals_cm = loc_strings[:,2]
+        assert np.all(depth_vals_cm > 0)
 
+        # Compute effective bounds for delta_depth_cm
+        min_depth, max_depth = self.depth_range
+        lower_bound = np.maximum(min_depth - min(depth_vals_cm), -self.delta_depth_max)
+        upper_bound = np.minimum(max_depth - max(depth_vals_cm), self.delta_depth_max)
+        
+        # Ensure lower_bound does not exceed upper_bound and sample
+        lower_bound = np.minimum(lower_bound, upper_bound)
+        delta_depth_cm = np.round(np.random.uniform(lower_bound, upper_bound))
+        
+        # Compute new depth values
+        new_depth_vals_cm = depth_vals_cm + delta_depth_cm
+        new_depth_vals_cm = new_depth_vals_cm.astype(np.uint16)
+        
+        # Validate all conditions
+        assert np.all(np.abs(delta_depth_cm) <= self.delta_depth_max), "Delta depth exceeds max limit!"
+        assert np.min(new_depth_vals_cm) >= min_depth, "Depth below min range!"
+        assert np.max(new_depth_vals_cm) <= max_depth, "Depth above max range!"
+        
+        # Calculate new depth values
+        loc_strings[:, 2] = new_depth_vals_cm
+        suffix_new = ""
+        for x in loc_strings:
+            suffix_new += "<loc{a[0]:04d}><loc{a[1]:04d}><loc{a[2]:04d}><seg{a[3]:03d}><seg{a[4]:03d}><seg{a[5]:03d}>".format(a=x)
+        depth_image_aug = depth_image_mm.copy()
+        depth_image_aug[depth_image_aug != 0] += (delta_depth_cm*10).astype(np.uint16)
+        
+        return depth_image_aug, suffix_new
 
-# Text ----------------------------------------------------------
+# Text Augmentations --------------------------------------------------------
 
 # Dictionary where values will be replaced with their corresponding keys
 clevr_move_replacement_dict = {

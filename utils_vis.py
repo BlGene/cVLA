@@ -139,7 +139,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
             curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
             draw_coordinate_frame(prediction, camera, ax)
-        except ValueError:
+        except (ValueError, IndexError):
             pass
 
     with io.BytesIO() as buffer:
