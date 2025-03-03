@@ -4,13 +4,15 @@ from PIL import Image
 from torch.utils.data import Dataset
 from pathlib import Path
 from utils_trajectory import DummyCamera
-from data_augmentations import depth_to_color
+from data_augmentations import depth_to_color, obj_start_crop
 
 def clean_prompt(prompt_text):
     return prompt_text.lower().replace("\n","").replace(".","").replace("  "," ")
 
 class JSONLDataset(Dataset):
-    def __init__(self, jsonl_file_path: str, image_directory_path=None, return_depth=False, return_camera=True, augment_rgb=None, clean_prompt=True, augment_text=None, depth_to_color=True):
+    def __init__(self, jsonl_file_path: str, image_directory_path=None, return_depth=False, return_camera=True, 
+                 augment_rgb=None, clean_prompt=True, augment_text=None, depth_to_color=True, augment_crop=None,
+                 crop_size=500):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
             dataset_path = jsonl_file_path.parent
@@ -31,6 +33,8 @@ class JSONLDataset(Dataset):
         self.augment_text = augment_text
         self.return_depth = return_depth
         self.depth_to_color = depth_to_color
+        self.augment_crop = augment_crop
+        self.crop_size = crop_size
 
         if self.return_camera:
             jsonl_all_path = Path(dataset_path) / "_annotations.all.jsonl"
@@ -52,20 +56,10 @@ class JSONLDataset(Dataset):
         if idx < 0 or idx >= len(self.entries):
             raise IndexError("Index out of range")
         
-        entry = self.entries[idx]
+        entry = self.entries[idx].copy()
 
         image_path = os.path.join(self.image_directory_path, entry['image'])
         image = Image.open(image_path)
-
-        if self.return_camera:
-            image_width, image_height = image.size
-            all_entry = self.all_entries[idx]
-            #camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
-            #camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
-            camera_extrinsic = all_entry["camera_extrinsic"]
-            camera_intrinsic = all_entry["camera_intrinsic"]
-            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
-            entry["camera"] = camera
         
         if self.augment_rgb is not None:
             image = self.augment_rgb(image)
@@ -75,6 +69,21 @@ class JSONLDataset(Dataset):
 
         if self.augment_text:
             entry["prefix"] = self.augment_text(entry["prefix"])
+
+        if self.augment_crop:
+            # Achtung! Incompatible with depth!
+            # Suffix was encoded with original image size, must be decoded also with original.
+            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], size=self.crop_size)
+        
+        if self.return_camera:
+            image_width, image_height = image.size # must be after crop
+            all_entry = self.all_entries[idx]
+            #camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
+            #camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
+            camera_extrinsic = all_entry["camera_extrinsic"]
+            camera_intrinsic = all_entry["camera_intrinsic"]
+            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
+            entry["camera"] = camera
 
         if self.return_depth:
             import numpy as np
