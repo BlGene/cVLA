@@ -12,7 +12,7 @@ def clean_prompt(prompt_text):
 class JSONLDataset(Dataset):
     def __init__(self, jsonl_file_path: str, image_directory_path=None, return_depth=False, return_camera=True, 
                  augment_rgb=None, clean_prompt=True, augment_text=None, augment_depth=None, depth_to_color=True, augment_crop=None,
-                 crop_size=500):
+                 crop_size=500, object_size=100):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
             dataset_path = jsonl_file_path.parent
@@ -36,6 +36,7 @@ class JSONLDataset(Dataset):
         self.depth_to_color = depth_to_color
         self.augment_crop = augment_crop
         self.crop_size = crop_size
+        self.object_size = object_size
 
         if self.return_camera:
             jsonl_all_path = Path(dataset_path) / "_annotations.all.jsonl"
@@ -74,7 +75,7 @@ class JSONLDataset(Dataset):
         if self.augment_crop:
             # Achtung! Incompatible with depth!
             # Suffix was encoded with original image size, must be decoded also with original.
-            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], size=self.crop_size)
+            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], crop_size=self.crop_size, object_size=self.object_size)
         
         if self.return_camera:
             image_width, image_height = image.size # must be after crop
@@ -87,7 +88,7 @@ class JSONLDataset(Dataset):
         if self.augment_crop:
             # Achtung! Incompatible with depth!
             # Suffix was encoded with original image size, must be decoded also with original.
-            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], size=self.crop_size)
+            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], crop_size=self.crop_size, object_size=self.object_size)
         
         if self.return_camera:
             image_width, image_height = image.size # must be after crop
