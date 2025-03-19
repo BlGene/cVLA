@@ -1,4 +1,5 @@
 import glob
+import time
 import h5py
 from pathlib import Path
 import torch
@@ -46,18 +47,36 @@ class H5Dataset(Dataset):
     def __getitem__(self, idx: int):
         if idx < 0 or idx >= len(self):
             raise IndexError("Index out of range")
+            
+        max_retries = 300  # 15 minutes = 900 seconds / 3 seconds per retry
+        for retry_count in range(max_retries):
+            try:
+                return self.getitem_func(idx)
+            except OSError as e:
+                print(f"OSError encountered for index {idx}: {e}. Retrying in 3 seconds...")
+                time.sleep(3)
+    
+        # If all retries fail, load a random sample
+        print(f"Failed to load index {idx} after 15 minutes. Loading a random sample instead.")
+        random_idx = random.randint(0, len(self) - 1)
+        return self.getitem_func(random_idx)
+    
         
+    def getitem_func(self, idx: int):
         action_text = None
         for x in self.h5_file[f'traj_{idx}/obs/extra'].keys():
             if x.startswith("action_text_"):
                 action_text = str(x).replace("action_text_", "")
-            
-        obj_start = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_start"][:]))
-        obj_end = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_end"][:]))
-        grasp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/grasp_pose"][:]))
-        tcp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/tcp_pose"][:]))
-        camera_intrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/intrinsic_cv"][:]
-        camera_extrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/extrinsic_cv"][:]
+
+        frame_idx = slice(0,1)
+        
+        obj_start = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_start"][frame_idx]))
+        obj_end = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_end"][frame_idx]))
+        grasp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/grasp_pose"][frame_idx]))
+        tcp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/tcp_pose"][frame_idx]))
+        camera_intrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/intrinsic_cv"][frame_idx]
+        camera_extrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/extrinsic_cv"][frame_idx]
+        #print("XXX", obj_start.shape)
         
         image = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/rgb'][0]
         width, height, c = image.shape
@@ -74,7 +93,7 @@ class H5Dataset(Dataset):
         depth = None
         seg = None
         if self.augment_rgbds is not None:
-            depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0]
+            depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0][:,:,0]
             depth = np.clip(depth, 0, 1023)
             seg = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/segmentation'][0]
             image = self.augment_rgbds(image, depth, seg)

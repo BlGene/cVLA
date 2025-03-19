@@ -113,7 +113,13 @@ def render_example(image, label, prediction=None, text=None, camera=None):
         
     if camera is None:
         camera = get_standard_camera(image_width, image_height)
-        
+
+    # logic for when to draw coords
+    draw_pred_coords = False
+    draw_label_coords = False
+    if prediction is not None:
+        draw_label_coords = False
+    
     plot_width, plot_height = 448, 448
     dpi = 100
     figsize = (plot_width / dpi, plot_height / dpi)
@@ -125,6 +131,10 @@ def render_example(image, label, prediction=None, text=None, camera=None):
             curve_25d, quat_c = decode_caption_xyzrotvec2(label, camera) 
             curve_2d  = curve_25d[:, :2]
             ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
+            if draw_label_coords:
+                draw_coordinate_frame(prediction, camera, ax)
+
+                
         except ValueError:
             pass
 
@@ -138,7 +148,8 @@ def render_example(image, label, prediction=None, text=None, camera=None):
         try:
             curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
-            draw_coordinate_frame(prediction, camera, ax)
+            if draw_pred_coords:
+                draw_coordinate_frame(prediction, camera, ax)
         except (ValueError, IndexError):
             pass
 

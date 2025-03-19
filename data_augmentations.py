@@ -135,9 +135,9 @@ def test_norm_color_pingpoing():
 
 # Depth Augmentation --------------------------------------------------------
 class DepthAugmentation:
-    def __init__(self):
-        self.depth_range = (25, 100)
-        self.delta_depth_max = 35
+    def __init__(self, depth_range=(25,100), max_delta_depth=35):
+        self.depth_range = depth_range
+        self.delta_depth_max = max_delta_depth
         
     def __call__(self, depth_image_mm, suffix):
         """
