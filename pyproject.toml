@@ -1,0 +1,41 @@
+[project]
+name = "cVLA"
+version = "0.0.1"
+authors = [
+  { name="Max Argus", email="argus.max@gmail.com" },
+]
+description = "Camera-centric VLA"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "transformers==4.48.0",
+    "accelerate==1.3.0",
+    "jupyterlab",
+    "ipywidgets",
+    "Pillow",
+    "h5py",
+    "matplotlib",
+    "numpy",
+    "scipy",
+    "sentencepiece",
+    "torch",
+    "torchvision",
+    "tyro"
+]
+
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.urls]
+Homepage = "https://github.com/BlGene/cVLA"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
