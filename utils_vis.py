@@ -98,12 +98,20 @@ def draw_coordinate_frame(label, camera, ax):
 
 
 
-def render_example(image, label, prediction=None, text=None, camera=None):
+def render_example(image, label, prediction=None, text=None, camera=None, dec=None, dec_pred=None):
     """render examples, for use in notebook:
     
         from IPython.display import display, HTML
         display(HTML(html_imgs))
     """
+    dec_label = dec
+    if dec_label is None:
+        print("Warning: default action decoder is used")
+        dec_label = decode_caption_xyzrotvec2
+        
+    if dec_pred is None:
+        dec_pred = dec_label
+
     if isinstance(image, Image.Image):
         image_width, image_height = image.size
     elif isinstance(image, np.ndarray):
@@ -128,7 +136,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     ax.axis('off')
     if camera:
         try:
-            curve_25d, quat_c = decode_caption_xyzrotvec2(label, camera) 
+            curve_25d, quat_c = dec_label(label, camera) 
             curve_2d  = curve_25d[:, :2]
             ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
             if draw_label_coords:
@@ -146,7 +154,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     if prediction:
         html_text += f'</br></br>{html.escape("pred: "+prediction)}'
         try:
-            curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
+            curve_2d_gt, quat_c = dec_pred(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
             if draw_pred_coords:
                 draw_coordinate_frame(prediction, camera, ax)

@@ -1,22 +1,24 @@
 import glob
 import time
 import h5py
+import random
 from pathlib import Path
 import torch
 from PIL import Image
 import numpy as np
 from mani_skill.utils.structs import Pose
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
+from mani_skill.examples.utils_traj_tokens import getActionEncInstance
 from utils_trajectory import DummyCamera
 from torch.utils.data import Dataset
 from data_augmentations import depth_to_color
 
-enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 
 
 class H5Dataset(Dataset):
-    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, depth_to_color=True):
+    def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None,
+                 augment_depth=None, depth_to_color=True, augment_text=None,
+                 action_encoder="xyzrotvec-cam-1024xy"):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -30,11 +32,14 @@ class H5Dataset(Dataset):
             h5_file_path = h5_file_or_dir
         else:
             raise ValueError(f"dataset neither file nor dir: {h5_file_or_dir}")
-        self.h5_file = h5py.File(h5_file_path, "r")
-        self.return_depth = return_depth
         
+        self.h5_file = h5py.File(h5_file_path, "r")
         self.h5_file_len = len(self.h5_file)
+        
+        self.action_encoder_name = action_encoder
+        self.action_encoder = getActionEncInstance(action_encoder)
 
+        self.return_depth = return_depth
         self.augment_rgb = augment_rgb
         self.augment_rgbds = augment_rgbds
         self.augment_text = augment_text
@@ -85,9 +90,10 @@ class H5Dataset(Dataset):
         if self.augment_text is not None:
             action_text = self.augment_text(action_text)
 
+        enc = self.action_encoder.encode_trajectory
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                        camera, grasp_pose, tcp_pose,
-                                                                       action_text, enc_func, robot_pose=None)
+                                                                       action_text, enc, robot_pose=None)
         entry = dict(prefix=prefix, suffix=token_str, camera=camera)
 
         depth = None

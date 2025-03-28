@@ -214,18 +214,52 @@ real_block_sent = {'put the {} in the {}': 92, 'put the {} inside the {}': 30, '
 
 real_block_word = {'cube': {'block': 118, 'cube': 21, 'box': 2},'sphere': {'sphere': 50, 'ball': 50}}
 
-def complexify_text(text):
-    _, size_1, color_1, shape_1, _, size_2, color_2, shape_2 = text.strip().split(" ")
-    sampled_key = random.choices(list(real_block_sent.keys()), weights=list(real_block_sent.values()))[0]
-    if shape_1 in real_block_word:
-        shape_1 = random.choices(list(real_block_word[shape_1].keys()), weights=list(real_block_word[shape_1].values()))[0]
-    if shape_2 in real_block_word:
-        shape_2 = random.choices(list(real_block_word[shape_2].keys()), weights=list(real_block_word[shape_2].values()))[0]
-    object_name = " ".join((size_1, color_1, shape_1))
-    container_name = " ".join((size_2, color_2, shape_2))
-    new_text = sampled_key.format(object_name, container_name)
-    return new_text
+# def complexify_text(text):
+#     _, size_1, color_1, shape_1, _, size_2, color_2, shape_2 = text.strip().split(" ")
+#     sampled_key = random.choices(list(real_block_sent.keys()), weights=list(real_block_sent.values()))[0]
+#     if shape_1 in real_block_word:
+#         shape_1 = random.choices(list(real_block_word[shape_1].keys()), weights=list(real_block_word[shape_1].values()))[0]
+#     if shape_2 in real_block_word:
+#         shape_2 = random.choices(list(real_block_word[shape_2].keys()), weights=list(real_block_word[shape_2].values()))[0]
+#     object_name = " ".join((size_1, color_1, shape_1))
+#     container_name = " ".join((size_2, color_2, shape_2))
+#     new_text = sampled_key.format(object_name, container_name)
+#     return new_text
 
+
+#MOVE_REGEX = re.compile(r"^move\s+([\w-]+(?:\s+[\w-]+)*)\s+onto\s+([\w-]+(?:\s+[\w-]+)*)$")
+MOVE_REGEX = re.compile(r"^move\s+([\w'-]+(?:\s+[\w'-]+)*)\s+onto\s+([\w'-]+(?:\s+[\w'-]+)*)$")
+
+def complexify_text(text):
+    match = MOVE_REGEX.match(text.strip())
+    if not match:
+        print("Warning Input text does not match the expected pattern: 'move X onto Y'")
+        print("Text is:", text)
+        return text
+        #raise ValueError("Input text does not match the expected pattern: 'move X onto Y'")
+
+    object_phrase, container_phrase = match.groups()
+
+    try:
+        # Extract individual attributes (assuming format: "size color shape")
+        size_1, color_1, shape_1 = object_phrase.split(" ")
+        size_2, color_2, shape_2 = container_phrase.split(" ")
+        # Replace shapes with more complex names if available
+        if shape_1 in real_block_word:
+            shape_1 = random.choices(list(real_block_word[shape_1].keys()), weights=list(real_block_word[shape_1].values()))[0]
+        if shape_2 in real_block_word:
+            shape_2 = random.choices(list(real_block_word[shape_2].keys()), weights=list(real_block_word[shape_2].values()))[0]
+        object_name = " ".join((size_1, color_1, shape_1))
+        container_name = " ".join((size_2, color_2, shape_2))
+    except ValueError:
+        object_name = object_phrase
+        container_name = container_phrase
+
+    # Sample a sentence template and format the new sentence
+    sampled_key = random.choices(list(real_block_sent.keys()), weights=list(real_block_sent.values()))[0]
+    new_text = sampled_key.format(object_name, container_name)
+    
+    return new_text
 
 
 # Crop ----------------------------------------------------------
