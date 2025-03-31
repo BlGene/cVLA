@@ -19,7 +19,7 @@ enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 
 class H5Dataset(Dataset):
     def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, depth_to_color=True,
-                 return_only_prefix=False):
+                 return_only_prefix=False, limit_samples=None):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -35,8 +35,10 @@ class H5Dataset(Dataset):
             raise ValueError(f"dataset neither file nor dir: {h5_file_or_dir}")
         self.h5_file = h5py.File(h5_file_path, "r")
         self.return_depth = return_depth
-        
-        self.h5_file_len = len(self.h5_file)
+        if limit_samples is not None:
+            self.h5_file_len = limit_samples
+        else:
+            self.h5_file_len = len(self.h5_file)
 
         self.augment_rgb = augment_rgb
         self.augment_rgbds = augment_rgbds
@@ -96,6 +98,8 @@ class H5Dataset(Dataset):
         entry = dict(prefix=prefix, suffix=token_str, camera=camera)
 
         if self.return_only_prefix:     # used only for paired dataset for setup
+            entry["camera_intrinsic"] = camera_intrinsic
+            entry["camera_extrinsic"] = camera_extrinsic
             return entry
 
         depth = None
