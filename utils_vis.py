@@ -156,6 +156,7 @@ def render_example(image, label, prediction=None, text=None, camera=None, dec=No
         try:
             curve_2d_gt, quat_c = dec_pred(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
+            ax.scatter(curve_2d_gt[0, 0], curve_2d_gt[0, 1], color='red')
             if draw_pred_coords:
                 draw_coordinate_frame(prediction, camera, ax)
         except (ValueError, IndexError):

@@ -20,7 +20,7 @@ from data_augmentations import depth_to_color
 class H5Dataset(Dataset):
     def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None,
                  augment_depth=None, depth_to_color=True, augment_text=None, return_only_prefix=False,
-                 action_encoder="xyzrotvec-cam-1024xy"):
+                 action_encoder="xyzrotvec-cam-1024xy", limit_samples=None):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -34,12 +34,12 @@ class H5Dataset(Dataset):
             h5_file_path = h5_file_or_dir
         else:
             raise ValueError(f"dataset neither file nor dir: {h5_file_or_dir}")
-        
         self.h5_file = h5py.File(h5_file_path, "r")
-        self.h5_file_len = len(self.h5_file)
-        
-        self.action_encoder_name = action_encoder
-        self.action_encoder = getActionEncInstance(action_encoder)
+        self.return_depth = return_depth
+        if limit_samples is not None:
+            self.h5_file_len = limit_samples
+        else:
+            self.h5_file_len = len(self.h5_file)
 
         self.return_depth = return_depth
         self.augment_rgb = augment_rgb
@@ -101,6 +101,8 @@ class H5Dataset(Dataset):
         entry = dict(prefix=prefix, suffix=token_str, camera=camera)
 
         if self.return_only_prefix:     # used only for paired dataset for setup
+            entry["camera_intrinsic"] = camera_intrinsic
+            entry["camera_extrinsic"] = camera_extrinsic
             return entry
 
         depth = None
