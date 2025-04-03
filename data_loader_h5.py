@@ -41,6 +41,8 @@ class H5Dataset(Dataset):
         else:
             self.h5_file_len = len(self.h5_file)
 
+        self.action_encoder_name = action_encoder
+        self.action_encoder = getActionEncInstance(action_encoder)
         self.return_depth = return_depth
         self.augment_rgb = augment_rgb
         self.augment_rgbds = augment_rgbds
@@ -127,6 +129,8 @@ class H5Dataset(Dataset):
             
             if self.depth_to_color:
                 depth = depth_to_color(depth)
+                depth = np.clip((depth * 255).round(), 0, 255).astype(np.uint8)
+
             #else:
             #    depth = depth[:,:,0]
             return [depth, image], entry

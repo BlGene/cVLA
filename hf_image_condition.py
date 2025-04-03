@@ -144,34 +144,6 @@ def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera):
     return compute_metrics
 
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_id", type=str, default="google/paligemma2-3b-pt-224")
-    parser.add_argument("--conditioning", type=str, choices=["image", "text", "trajectory"], default="trajectory")
-    parser.add_argument("--num_images_in_context", type=int, default=1)
-    parser.add_argument("--image_order", type=str, choices=["interleaved", "images_first"], default="interleaved")
-    parser.add_argument("--extra_run_name", type=str, default="debug")
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--batch_size_dev", type=int, default=2)
-    parser.add_argument("--p_background", type=float, default=0.2)
-    parser.add_argument("--num_repeats", type=int, default=1)
-    parser.add_argument("--checkpoint", type=str, default=None)
-    parser.add_argument("--no_augs", action="store_true")
-    parser.add_argument("--max_tokens", type=int, default=12, help="Max tokens for generation (basically sequence length)")
-    parser.add_argument("--lr", type=float, default=3e-5)
-    parser.add_argument("--warmup_ratio", type=float, default=0.05)
-    parser.add_argument("--p_copy", type=float, default=0.0, help="Percentage of pairs with direct copy of images in context")
-    parser.add_argument("--apply_copy_augs", action="store_true", help="Apply augmentations to the copy of the images in context")
-    parser.add_argument("--sort_by_l2_distance", action="store_true", help="Sort the images in context by L2 distance to the query image")
-    parser.add_argument("--save_steps", type=int, default=350)
-    parser.add_argument("--save_limit", type=int, default=5)
-    parser.add_argument("--save_path", type=str, default="/work/dlclarge2/bratulic-cvla/models")
-    parser.add_argument("--no_eval", action="store_true", help="Do not evaluate the model")
-
-
-    return parser.parse_args()
-
-
 def get_model(model_type="google/paligemma2-3b-pt-224", TORCH_DTYPE=torch.bfloat16, DEVICE=torch.device('cuda'), checkpoint=None):
     if "paligemma" not in model_type:
         processor = AutoProcessor.from_pretrained(model_type)
@@ -199,7 +171,7 @@ def save_hyperparams(save_path_final, save_path, args):
             f.write(f"{arg}: {getattr(args, arg)}\n")
 
     # save the script - just copy paste it to the save_path with os
-    os.system(f"cp /home/bratulic/git_repos/robo/cVLA/hf_image_condition.py {save_path_final}/hf_image_condition.py")
+    os.system(f"cp {__file__} {save_path_final}/hf_image_condition.py")
 
 
 def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera):
@@ -260,7 +232,7 @@ def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn,
         dataloader_num_workers=4,
         # Add evaluation-related settings
         eval_strategy=eval_strategy,  # or "epoch"
-        eval_steps= SAVE_STEPS,        # how often to evaluate
+        eval_steps=SAVE_STEPS,        # how often to evaluate
         predict_with_generate=True,   # important for generation tasks
         generation_config=generation_config,
         do_eval=not args.no_eval,
@@ -282,51 +254,115 @@ def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn,
 
 def get_datasets(args, dataset_location):
     # SETTING UP THE DATASET
-    num_images_in_context = args.num_images_in_context
-    image_order = args.image_order
-    run_name = f"_imagesInContext_{num_images_in_context}_promptOrder_{image_order}"
-    load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_new.pkl"
-    run_name += f"maxTokens{args.max_tokens}_lr{args.lr}" + args.extra_run_name
-
-    bg_image_dataset = ImageFolderDataset("/tmp/indoorCVPR/Images", transform=transforms.RandomResizedCrop((448,448)))
+    action_encoder = "xyzrotvec-cam-512xy128d"
+    bg_image_dataset = ImageFolderDataset("/tmp/indoorCVPR/Images", transform=transforms.RandomResizedCrop((448, 448)))
     randomize_background = RandomizeBackgrounds(p=args.p_background, background_images=bg_image_dataset)
     if args.no_augs:
         raw_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False)
     else:
-        raw_dataset = H5Dataset(dataset_location, augment_rgbds=randomize_background, augment_rgb=augment_image_rgb, augment_text=None,
-                                augment_depth=None, return_depth=False)
+        raw_dataset = H5Dataset(dataset_location, augment_rgbds=randomize_background, augment_rgb=augment_image_rgb, augment_text=complexify_text,
+                                augment_depth=None, return_depth=False, action_encoder=action_encoder)
         
-    if args.conditioning == "trajectory":
+    if args.conditioning == "text":
+        run_name = f"text_lr{args.lr}" + args.extra_run_name
+        train_dataset = raw_dataset
+        eval_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False, limit_samples=200)
+        eval_dummy_camera = eval_dataset[0][1]["camera"]
+    
+    elif args.conditioning == "trajectory":
+        run_name = f"_imagesInContext_{num_images_in_context}_promptOrder_{image_order}"
+        run_name += f"maxTokens{args.max_tokens}_lr{args.lr}" + args.extra_run_name
+        num_images_in_context = args.num_images_in_context
+        image_order = args.image_order
+        load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_new.pkl"
         train_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
                                     mode="train", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, sort_by_l2_distance=args.sort_by_l2_distance)
 
         eval_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
                                     mode="test", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, sort_by_l2_distance=args.sort_by_l2_distance)
         eval_dummy_camera = eval_dataset[0][1][0]["camera"]
-    elif args.conditioning == "text":
-        train_dataset = raw_dataset
-        eval_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False, limit_samples=200)
-        eval_dummy_camera = eval_dataset[0][1]["camera"]
-
+    else:
+        raise ValueError("Unknown conditioning {args.conditioning}")
+    
     print("dataset_location:", dataset_location,"samples:", len(raw_dataset), "paired_samples:", len(train_dataset))
 
     return train_dataset, eval_dataset, run_name, eval_dummy_camera
 
 
-def main():
+def load_data_to_node(data_location="/work/dlclarge2/bratulic-cvla/"):
+    # DATA COPY-PASTING AND CHECK
+    if not os.path.exists('/tmp/indoorCVPR'):
+        cmd1 = (
+        "rsync -a --progress {data_location}/indoorCVPR_09.tar /tmp/ && "
+        "mkdir -p /tmp/indoorCVPR && "
+        "tar -xf /tmp/indoorCVPR_09.tar -C /tmp/indoorCVPR"
+        )
+        subprocess.run(cmd1, shell=True, check=True)
 
+        # Command 3: Check file type for /tmp/indoorCVPR
+        cmd3 = "file /tmp/indoorCVPR"
+        result1 = subprocess.run(cmd3, shell=True, check=True, capture_output=True, text=True)
+        print(result1.stdout)
+
+    if not os.path.exists('/tmp/clevr-act-7-depth'):
+        # Command 2: Copy the second dataset directory
+        cmd2 = "rsync -a --progress {data_location}/clevr-act-7-depth /tmp/"
+        subprocess.run(cmd2, shell=True, check=True)
+
+        # Command 4: Check file type for /tmp/clevr-act-7-depth
+        cmd4 = "file /tmp/clevr-act-7-depth"
+        result2 = subprocess.run(cmd4, shell=True, check=True, capture_output=True, text=True)
+        print(result2.stdout)
+
+        #!rsync -a --progress /data/lmbraid19/argusm/datasets/indoorCVPR.tar /tmp/ && mkdir -p /tmp/indoorCVPR && tar -xf /tmp/indoorCVPR.tar -C /tmp/indoorCVPR
+        #!rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-7-depth /tmp/
+        #!file /tmp/indoorCVPR
+        #!file /tmp/clevr-act-7-depth
+    else:
+        print('Data already exists')
+
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_id", type=str, default="google/paligemma2-3b-pt-224")
+    parser.add_argument("--conditioning", type=str, choices=["text", "trajectory"], default="text")
+    parser.add_argument("--extra_run_name", type=str, default="debug")
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size_dev", type=int, default=4)
+    parser.add_argument("--p_background", type=float, default=0.2)
+    parser.add_argument("--num_repeats", type=int, default=1)
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--no_augs", action="store_true")
+    parser.add_argument("--max_tokens", type=int, default=12, help="Max tokens for generation (basically sequence length)")
+    parser.add_argument("--lr", type=float, default=3e-5)
+    parser.add_argument("--warmup_ratio", type=float, default=0.05)
+    parser.add_argument("--save_steps", type=int, default=350)
+    parser.add_argument("--save_limit", type=int, default=5)
+    parser.add_argument("--save_path", type=str, default="/work/dlclarge2/bratulic-cvla/models")
+    parser.add_argument("--no_eval", action="store_true", help="Do not evaluate the model")
+    
+    # demo-specific options
+    parser.add_argument("--num_images_in_context", type=int, default=1)
+    parser.add_argument("--image_order", type=str, choices=["interleaved", "images_first"], default="interleaved")
+    parser.add_argument("--p_copy", type=float, default=0.0, help="Percentage of pairs with direct copy of images in context")
+    parser.add_argument("--apply_copy_augs", action="store_true", help="Apply augmentations to the copy of the images in context")
+    parser.add_argument("--sort_by_l2_distance", action="store_true", help="Sort the images in context by L2 distance to the query image")
+
+    return parser.parse_args()
+
+def main():
     # SETTING UP THE PATHS AND ARGS
     dataset_location = Path("/tmp/clevr-act-7-depth")
     current_time =  datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
     args = get_args()
 
-    # SETTING UP THE DATASETS
+    load_data_to_node()
+
     train_dataset, eval_dataset, run_name, eval_dummy_camera = get_datasets(args, dataset_location)
     
     # SETTING UP THE SAVE PATHS
     save_path_final = Path(args.save_path) / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
-    save_path = Path("/tmp/bratulic_cvla") / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
+    save_path = Path("/tmp/cvla") / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
     save_hyperparams(save_path_final, save_path, args)
 
     # SETTING UP THE MODEL
@@ -346,36 +382,7 @@ def main():
     # TRANSFER THE MODEL TO FINAL LOCATION
     os.system(f"mv {save_path}/* {save_path_final}/")
 
+
+
 if __name__ == "__main__":
-
-    # DATA COPY-PASTING AND CHECK
-    
-    if not os.path.exists('/tmp/indoorCVPR') or not os.path.exists('/tmp/clevr-act-7-depth'):
-        cmd1 = (
-        "rsync -a --progress /work/dlclarge2/bratulic-cvla/indoorCVPR_09.tar /tmp/ && "
-        "mkdir -p /tmp/indoorCVPR && "
-        "tar -xf /tmp/indoorCVPR_09.tar -C /tmp/indoorCVPR"
-        )
-        subprocess.run(cmd1, shell=True, check=True)
-
-        # Command 2: Copy the second dataset directory
-        cmd2 = "rsync -a --progress /work/dlclarge2/bratulic-cvla/clevr-act-7-depth /tmp/"
-        subprocess.run(cmd2, shell=True, check=True)
-
-        # Command 3: Check file type for /tmp/indoorCVPR
-        cmd3 = "file /tmp/indoorCVPR"
-        result1 = subprocess.run(cmd3, shell=True, check=True, capture_output=True, text=True)
-        print(result1.stdout)
-
-        # Command 4: Check file type for /tmp/clevr-act-7-depth
-        cmd4 = "file /tmp/clevr-act-7-depth"
-        result2 = subprocess.run(cmd4, shell=True, check=True, capture_output=True, text=True)
-        print(result2.stdout)
-        #!rsync -a --progress /data/lmbraid19/argusm/datasets/indoorCVPR.tar /tmp/ && mkdir -p /tmp/indoorCVPR && tar -xf /tmp/indoorCVPR.tar -C /tmp/indoorCVPR
-        #!rsync -a --progress /data/lmbraid19/argusm/datasets/clevr-act-7-depth /tmp/
-        #!file /tmp/indoorCVPR
-        #!file /tmp/clevr-act-7-depth
-    else:
-        print('Data already exists')
-
     main()

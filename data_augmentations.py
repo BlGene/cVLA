@@ -139,7 +139,7 @@ class DepthAugmentation:
         self.depth_range = depth_range
         self.delta_depth_max = max_delta_depth
         
-    def __call__(self, depth_image_mm, suffix):
+    def __call__(self, depth_image_mm, suffix, decc_func=None, camera=None):
         """
         Arguments:
             depth_image_mm: depth image in [mm]
@@ -169,7 +169,7 @@ class DepthAugmentation:
         new_depth_vals_cm = new_depth_vals_cm.astype(np.uint16)
         
         # Validate all conditions
-        assert np.all(np.abs(delta_depth_cm) <= self.delta_depth_max), "Delta depth exceeds max limit!"
+        assert np.all(np.abs(delta_depth_cm) <= self.delta_depth_max), f"Delta depth exceeds max limit! was {delta_depth_cm}, limit {self.delta_depth_max}"
         assert np.min(new_depth_vals_cm) >= min_depth, "Depth below min range!"
         assert np.max(new_depth_vals_cm) <= max_depth, "Depth above max range!"
         

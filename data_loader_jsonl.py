@@ -117,18 +117,19 @@ class JSONLDataset(Dataset):
         if self.return_depth:
             import numpy as np
             depth_path = os.path.join(self.image_directory_path, entry['image'].replace("_first.jpg", "_depth0.png"))
-            depth_xs = Image.open(depth_path)
-            depth_xs = np.array(depth_xs)
-            depth_xs[depth_xs==3000] = 0
+            depth_png = Image.open(depth_path)
+            depth_png = np.array(depth_png)
+            depth_png[depth_png==3000] = 0
             #scaling_png_to_mm = 3 / 65535 * 1000  # for real exports v1 and v2
             scaling_png_to_mm = 1
-            depth_mm = depth_xs * scaling_png_to_mm
+            depth = depth_png * scaling_png_to_mm
             if self.augment_depth is not None:
-                depth_mm, suffix = self.augment_depth(depth_mm, entry["suffix"])
+                depth, suffix = self.augment_depth(depth, entry["suffix"])
                 entry["suffix"] = suffix
             if self.depth_to_color:
-                depth_mm = depth_to_color(depth_mm)
-            return (depth_mm, image), entry
+                depth = depth_to_color(depth)
+                depth = np.clip((depth * 255).round(), 0, 255).astype(np.uint8)
+            return (depth, image), entry
         return image, entry
 
 class ValidDataset:
