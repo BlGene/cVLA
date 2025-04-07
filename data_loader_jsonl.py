@@ -9,8 +9,8 @@ from collections import defaultdict
 from torch.utils.data import Dataset
 
 from utils_trajectory import DummyCamera
-from data_augmentations import depth_to_color, obj_start_crop
 from utils_traj_tokens import getActionEncInstance
+from data_augmentations import depth_to_color as depth_to_color_func
 
 def clean_prompt(prompt_text):
     return prompt_text.lower().replace("\n","").replace(".","").replace("  "," ")
@@ -18,7 +18,7 @@ def clean_prompt(prompt_text):
 class JSONLDataset(Dataset):
     def __init__(self, jsonl_file_path: str, image_directory_path=None, return_depth=False, return_camera=True, 
                  augment_rgb=None, clean_prompt=True, augment_text=None, augment_depth=None, depth_to_color=True,
-                 augment_crop=None, crop_size=800, object_size=100, limit_samples=None):
+                 augment_crop=None, limit_samples=None):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
             dataset_path = jsonl_file_path.parent
@@ -46,8 +46,6 @@ class JSONLDataset(Dataset):
         self.return_depth = return_depth
         self.depth_to_color = depth_to_color
         self.augment_crop = augment_crop
-        self.crop_size = crop_size
-        self.object_size = object_size
         self.return_only_prefix = False
 
         self.action_encoder = getActionEncInstance("xyzrotvec-cam-1024xy")
@@ -97,7 +95,7 @@ class JSONLDataset(Dataset):
             assert self.return_depth == False
             # Achtung! Incompatible with depth!
             # Suffix was encoded with original image size, must be decoded also with original.
-            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], crop_size=self.crop_size, object_size=self.object_size)
+            image, entry["suffix"] = self.augment_crop(image, entry["suffix"])
         
         if self.return_camera:
             image_width, image_height = image.size # must be after crop
@@ -120,7 +118,7 @@ class JSONLDataset(Dataset):
                 depth, suffix = self.augment_depth(depth, entry["suffix"])
                 entry["suffix"] = suffix
             if self.depth_to_color:
-                depth = depth_to_color(depth)
+                depth = depth_to_color_func(depth)
                 depth = np.clip((depth * 255).round(), 0, 255).astype(np.uint8)
             return (depth, image), entry
         return image, entry

@@ -96,7 +96,30 @@ def draw_coordinate_frame(label, camera, ax):
     ax.plot((c[0], y[0]), (c[1], y[1]), '.-', color='green')
     ax.plot((c[0], z[0]), (c[1], z[1]), '.-', color='blue')
 
+def draw_probas_edge(image, pred_scores):
+    # pred_scores: see render_example documentation
+    image_height, image_width, _ = image.shape
 
+    # === convert token positions and probabilities into histogram
+    loc_h = pred_scores["loc_h"]/(1024-1)*image_height
+    loc_w = pred_scores["loc_w"]/(1024-1)*image_width
+    probas_y, _ = np.histogram(loc_h, bins=image_height, range=(0, image_height), weights=pred_scores["scores_h"])
+    probas_x, _ = np.histogram(loc_w, bins=image_width, range=(0, image_width), weights=pred_scores["scores_w"])
+    eps = 0.1
+    probas_y = probas_y / (probas_y.max() + eps) * 255.0 # make colors visible
+    probas_x = probas_x / (probas_x.max() + eps) * 255.0 # make colors visible
+
+    # === draw the strip
+    stripe_width = 30 # in pixels
+    color_y = np.array([1.0, 1.0, 0.0])
+    color_strip = probas_y[:, None] * color_y[None, :] # (image_height, 3)
+    image[:, 0:stripe_width] = color_strip[:image_height, None, :3] # (height, stripe_width (broadcast), 3)
+
+    color_x = np.array([0.0, 1.0, 0.5])
+    color_strip = probas_x[:, None] * color_x[None, :] # (image_width, 3)
+    image[0:stripe_width, :] = color_strip # (stripe_width (brooadcast), width, 3)
+
+    return image
 
 def render_example(image, label, prediction=None, text=None, camera=None, dec=None, dec_pred=None):
     """render examples, for use in notebook:
