@@ -16,8 +16,8 @@ def clean_prompt(prompt_text):
 
 class JSONLDataset(Dataset):
     def __init__(self, jsonl_file_path: str, image_directory_path=None, return_depth=False, return_camera=True, 
-                 augment_rgb=None, clean_prompt=True, augment_text=None, augment_depth=None, depth_to_color=True, augment_crop=None,
-                 crop_size=500, object_size=100):
+                 augment_rgb=None, clean_prompt=True, augment_text=None, augment_depth=None, depth_to_color=True,
+                 augment_crop=None, crop_size=800, object_size=100, limit_samples=None):
         jsonl_file_path = Path(jsonl_file_path)
         if jsonl_file_path.is_file():
             dataset_path = jsonl_file_path.parent
@@ -29,9 +29,14 @@ class JSONLDataset(Dataset):
             raise ValueError(f"didn't find {jsonl_file_path}")
         if image_directory_path is None:
             image_directory_path = Path(dataset_path) / "dataset"
+
         self.jsonl_file_path = jsonl_file_path
         self.image_directory_path = image_directory_path
         self.entries = self._load_entries(jsonl_file_path)
+        if limit_samples:
+            keep_indices = np.linspace(0, len(self.entries) - 1, limit_samples, dtype=int)
+            self.entries = [self.entries[i] for i in keep_indices]
+            
         self.clean_promt = clean_prompt
         self.return_camera = return_camera
         self.augment_rgb = augment_rgb
@@ -42,7 +47,6 @@ class JSONLDataset(Dataset):
         self.augment_crop = augment_crop
         self.crop_size = crop_size
         self.object_size = object_size
-
         self.return_only_prefix = False
 
         if self.return_camera:
@@ -87,6 +91,7 @@ class JSONLDataset(Dataset):
             entry["prefix"] = self.augment_text(entry["prefix"])
 
         if self.augment_crop:
+            assert self.return_depth == False
             # Achtung! Incompatible with depth!
             # Suffix was encoded with original image size, must be decoded also with original.
             image, entry["suffix"] = self.augment_crop(image, entry["suffix"], crop_size=self.crop_size, object_size=self.object_size)
@@ -94,21 +99,6 @@ class JSONLDataset(Dataset):
         if self.return_camera:
             image_width, image_height = image.size # must be after crop
             all_entry = self.all_entries[idx]
-            camera_extrinsic = all_entry["camera_extrinsic"]
-            camera_intrinsic = all_entry["camera_intrinsic"]
-            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
-            entry["camera"] = camera
-
-        if self.augment_crop:
-            # Achtung! Incompatible with depth!
-            # Suffix was encoded with original image size, must be decoded also with original.
-            image, entry["suffix"] = self.augment_crop(image, entry["suffix"], crop_size=self.crop_size, object_size=self.object_size)
-        
-        if self.return_camera:
-            image_width, image_height = image.size # must be after crop
-            all_entry = self.all_entries[idx]
-            #camera_extrinsic = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
-            #camera_intrinsic = [[[410.029, 0.0, 224.0], [0.0, 410.029, 224.0], [0.0, 0.0, 1.0]]]
             camera_extrinsic = all_entry["camera_extrinsic"]
             camera_intrinsic = all_entry["camera_intrinsic"]
             camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)

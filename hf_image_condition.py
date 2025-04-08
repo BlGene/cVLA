@@ -26,11 +26,6 @@ def extract_tokens(text):
     return re.findall(r"<loc\d+>|<seg\d+>", text)
 
 
-def augment_suffix(suffix):
-    parts = suffix.split(' ; ')
-    random.shuffle(parts)
-    return ' ; '.join(parts)
-
 
 def get_robot_state(prefix):
     pattern = r"((?:<loc\d+>|<seg\d+>)+)"
@@ -81,10 +76,9 @@ def get_collate_fn(processor, num_images_in_context, image_order, TORCH_DTYPE, a
     return collate_fn
 
 
-def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera):
+def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera, encoder):
     eval_dummy_camera.extrinsic_matrix = torch.tensor([[[1, 0, 0, 0.0], [0, 1, 0, 0], [0, 0, 1, 0]]])
-    encoder_default = TrajectoryEncoder_xyzrotvec2()
-    decoder_fn = encoder_default.decode_trajectory
+    decoder_fn = encoder.decode_trajectory
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
         metric = []
@@ -244,7 +238,7 @@ def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn,
         eval_dataset=eval_dataset,
         data_collator=collate_fn,
         args=args_jax,
-        compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_dummy_camera),
+        compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_dummy_camera, encoder=eval_dataset.action_encoder),
     )
 
     trainer.model.config.use_cache = False
@@ -257,14 +251,36 @@ def get_datasets(args, dataset_location):
     action_encoder = "xyzrotvec-cam-512xy128d"
     bg_image_dataset = ImageFolderDataset("/tmp/indoorCVPR/Images", transform=transforms.RandomResizedCrop((448, 448)))
     randomize_background = RandomizeBackgrounds(p=args.p_background, background_images=bg_image_dataset)
+    return_depth = False
     if args.no_augs:
-        raw_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False)
+        augment_rgbds = None
+        augment_rgb=None
+        augment_text=None
+        augment_depth=None
     else:
-        raw_dataset = H5Dataset(dataset_location, augment_rgbds=randomize_background, augment_rgb=augment_image_rgb, augment_text=complexify_text,
-                                augment_depth=None, return_depth=False, action_encoder=action_encoder)
+        augment_rgbds=randomize_background
+        augment_rgb = augment_image_rgb
+        augment_text = complexify_text
+        augment_depth = None
+    
+    if "mix30obj" in dataset_location:
+        from torch.utils.data import ConcatDataset
+        dataset_location1 = "/tmp/clevr-act-7-depth"
+        dataset_location2 = "/tmp/cvla-7-obja"
+        dataset1 = H5Dataset(dataset_location1, return_depth=return_depth, action_encoder=action_encoder, limit_samples=100_000,
+                             augment_rgbds=augment_rgbds, augment_rgb=augment_rgb, augment_text=augment_text, augment_depth=augment_depth)
+        dataset2 = H5Dataset(dataset_location2, return_depth=return_depth, action_encoder=action_encoder, limit_samples=50_000,
+                             augment_rgbds=augment_rgbds, augment_rgb=augment_rgb, augment_text=augment_text, augment_depth=augment_depth)
+        raw_dataset = ConcatDataset([dataset1, dataset2])
+        dataset_location = "/tmp/clevr-act-7-depth"  # so that eval dataset can be loaded
+    else:
+        raw_dataset = H5Dataset(dataset_location, augment_rgbds=augment_rgbds, augment_rgb=augment_rgb, augment_text=augment_text,
+                                augment_depth=augment_depth, return_depth=return_depth, action_encoder=action_encoder)
+    
+
         
     if args.conditioning == "text":
-        run_name = f"text_lr{args.lr}" + args.extra_run_name
+        run_name = f"_text_lr{args.lr}" + args.extra_run_name
         train_dataset = raw_dataset
         eval_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False, limit_samples=200)
         eval_dummy_camera = eval_dataset[0][1]["camera"]
@@ -319,7 +335,7 @@ def load_data_to_node(data_location="/work/dlclarge2/bratulic-cvla/"):
         #!file /tmp/indoorCVPR
         #!file /tmp/clevr-act-7-depth
     else:
-        print('Data already exists')
+        print('Data already copied.')
 
 
 def get_args():
@@ -352,7 +368,8 @@ def get_args():
 
 def main():
     # SETTING UP THE PATHS AND ARGS
-    dataset_location = Path("/tmp/clevr-act-7-depth")
+    #dataset_location = Path("/tmp/clevr-act-7-depth")
+    dataset_location = "mix30obj"
     current_time =  datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     args = get_args()
 
