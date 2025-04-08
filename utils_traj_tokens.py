@@ -6,9 +6,9 @@ from pdb import set_trace
 from scipy.spatial.transform import Rotation as R
 
 from mani_skill.utils.structs import Pose
-from mani_skill.examples.utils_trajectory import project_points, clip_and_interpolate
-from mani_skill.examples.utils_trajectory import unproject_points, unproject_points_cam
-from mani_skill.examples.utils_trajectory import generate_curve_torch
+from utils_trajectory import project_points, clip_and_interpolate
+from utils_trajectory import unproject_points
+from utils_trajectory import generate_curve_torch
 
 def normalize_imgcoord(traj, resolution_wh, token_num=1024):
     """
@@ -479,22 +479,28 @@ class TrajectoryEncoder_xyzrotvec2:
         if self.DEPTH_RANGE:
             assert self.DEPTH_SCALE is None
 
-    def encode_trajectory(self, curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
+    def encode_pixel_coords(self, curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
         """
+        Encode a curve to pixel coordinates
         Arguments:
-            curve_3d: position in [m]
-            orns_3d: pose in quaternion, scalar first
+            curve_3d: shape (N, P, 3) position in [m]
+            orns_3d: shape (N, P, 4) pose in quaternion, scalar first
 
         Returns:
-            Trajectory encoded as y, x, z with:
-                x, y being pixel positions in range (0, 1023) and z being depth in cm
+            curve_2d_short: shape (N, P, 3)
+            poses_c_quat
+            didclip
         """
-        # In theory this code should handle (N, 7) poses, but for now we only support single envs
+        assert curve_3d.ndim == 3 and curve_3d.shape[2] == 3
+        assert orns_3d.ndim == 3 and orns_3d.shape[2] == 4
+        assert curve_3d.shape[:2] == orns_3d.shape[:2]
+        assert curve_3d.shape[0] == 1  # for now
 
         curve_25d = project_points(camera, curve_3d, return_depth=True)
-        curve_2d = curve_25d[..., :2]
-        depth = curve_25d[..., 2]
-        curve_2d_short, didclip = clip_and_interpolate(curve_2d, camera, return_didclip=True)
+        #curve_2d = curve_25d[..., :2]
+        #depth = curve_25d[..., 2]
+        curve_25d_short, didclip = clip_and_interpolate(curve_25d, camera, return_didclip=True)
+        #print(curve_25d.shape, curve_2d_short.shape, didclip)
 
         # transform orientation to matrix
         assert curve_3d.shape[:2] == orns_3d.shape[:2]
@@ -506,14 +512,30 @@ class TrajectoryEncoder_xyzrotvec2:
         extrinsic_p = Pose.create_from_pq(p=camera.get_extrinsic_matrix()[:, :3, 3],
                                         q=extrinsic_orn.as_quat(scalar_first=True))
         poses_c = extrinsic_p * poses
-        orn_c_obj = R.from_quat(poses_c.get_q(), scalar_first=True)
-        rotvec = torch.tensor(orn_c_obj.as_rotvec())
+        poses_c_quat = R.from_quat(poses_c.get_q(), scalar_first=True)
+
+        return curve_25d_short, poses_c_quat, didclip
+
+    def encode_pixel_tokens(self, curve_25d_short, poses_c_quat, camera):
+        """
+        Arguments:
+            curve_25d_short: shape (N, P, 3) tensor
+            poses_c_quat: shape (N * P) sklear Rotation
+        """
+        assert curve_25d_short.ndim == 3
+        assert len(poses_c_quat) == curve_25d_short.shape[0] * curve_25d_short.shape[1]
+        assert curve_25d_short.shape[0] == 1  # for now
+
+        #orn_c_obj = R.from_quat(poses_c.get_q(), scalar_first=True)
+        rotvec = torch.tensor(poses_c_quat.as_rotvec())
         rotvec_positive = rotvec + torch.tensor([np.pi,]*3)
         is_ok = (rotvec_positive > 0).all() and (rotvec_positive < 2*np.pi).all()
         if not is_ok:
             print("Warning: Rotvec out of range.")
 
         # This is the part that is not parrelized
+        #print("XXX", np.allclose(curve_2d_short[:,:,2], depth))
+        depth = curve_25d_short[:, :, 2]
         env_idx = 0
         if self.DEPTH_SCALE:
             depth_int = (depth[env_idx]*self.DEPTH_SCALE).round().int()  # distance from camera in [cm]
@@ -527,19 +549,41 @@ class TrajectoryEncoder_xyzrotvec2:
         if not torch.allclose(depth_env,depth_env_o):
             print("Warning: depth out of range.", depth_env)
         
-        traj_norm = normalize_imgcoord(curve_2d_short[env_idx], (camera.width, camera.height), token_num=self.XY_TOKENS)
+        traj_norm = normalize_imgcoord(curve_25d_short[env_idx][:,:2], (camera.width, camera.height), token_num=self.XY_TOKENS)
         rotvec_int = (rotvec_positive * self.ROT_SCALE).round().int()
         result = ""
         for keypoint_xy, keypoint_d, rv in zip(traj_norm, depth_env, rotvec_int):
             result += f"<loc{keypoint_xy[1]:04d}><loc{keypoint_xy[0]:04d}><loc{keypoint_d:04d}>"
             result += f"<seg{rv[0]:03d}><seg{rv[1]:03d}><seg{rv[2]:03d}>"
         result = result.strip()  # Remove any trailing newlines
+        return result
+
+    def encode_trajectory(self, curve_3d, orns_3d, camera, robot_pose=None, return_didclip=False):
+        """
+        Encode a curve to pixel coordinates
+        Arguments:
+            curve_3d: shape (N, P, 3) position in [m]
+            orns_3d: shape (N, P, 4) pose in quaternion, scalar first
+
+        Returns:
+            curve_2d_short: shape (N, P, 3)
+            poses_c_quat
+            didclip
+        """
+        assert curve_3d.ndim == 3 and curve_3d.shape[2] == 3
+        assert orns_3d.ndim == 3 and orns_3d.shape[2] == 4
+        assert curve_3d.shape[:2] == orns_3d.shape[:2]
+        assert curve_3d.shape[0] == 1  # for now
+
+        # In theory this code should handle (N, 7) poses, but for now we only support single envs
+        curve_2d_short, poses_c, didclip = self.encode_pixel_coords(curve_3d, orns_3d, camera, robot_pose=robot_pose)
+        depth = curve_2d_short[:,:,2]
+        result = self.encode_pixel_tokens(curve_2d_short, poses_c, camera)
         if return_didclip:
             return curve_2d_short, depth, result, didclip 
         return curve_2d_short, depth, result
 
-
-    def decode_caption(self, caption, camera=None, robot_pose=None):
+    def decode_caption(self, caption: str, camera=None, robot_pose=None):
         """
         Takes a trajectory string and converts it into curve_25d, quat_c
         
@@ -547,8 +591,8 @@ class TrajectoryEncoder_xyzrotvec2:
             caption: see encode_trajectory
 
         Returns:
-            curve_3d: position in [px] in camera coordinates
-            orns_3d: pose in quaternion, scalar first in camera coordinates
+            curve_3d: position in [px, px, m] in camera coordinates shape (P, 3)
+            orns_3d: pose in quaternion, scalar first in camera coordinates, shape (P, 4)
         """
 
         # Pattern to extract numbers inside <loc####> tags
@@ -584,12 +628,12 @@ class TrajectoryEncoder_xyzrotvec2:
         quat_c = torch.tensor(R.from_rotvec(rotvec).as_quat(scalar_first=True)).float()
         return curve_25d, quat_c
 
-    def decode_trajectory(self, caption, camera=None, robot_pose=None):
+    def decode_trajectory(self, caption: str, camera=None, robot_pose=None):
         """
         Takes a caption string and converts it to world coordinates
         Returns:
-            curve_w in world/robot coordinates
-            quat_w in world/robot coordinates
+            curve_w in world/robot coordinates, shape (P, 3)
+            quat_w in world/robot coordinates, shape (P, 4)
         """
         curve_25d, quat_c = self.decode_caption(caption, camera)
         # from camera to world coordinates

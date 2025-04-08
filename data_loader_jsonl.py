@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 
 from utils_trajectory import DummyCamera
 from data_augmentations import depth_to_color, obj_start_crop
+from utils_traj_tokens import getActionEncInstance
 
 def clean_prompt(prompt_text):
     return prompt_text.lower().replace("\n","").replace(".","").replace("  "," ")
@@ -48,6 +49,8 @@ class JSONLDataset(Dataset):
         self.crop_size = crop_size
         self.object_size = object_size
         self.return_only_prefix = False
+
+        self.action_encoder = getActionEncInstance("xyzrotvec-cam-1024xy")
 
         if self.return_camera:
             jsonl_all_path = Path(dataset_path) / "_annotations.all.jsonl"

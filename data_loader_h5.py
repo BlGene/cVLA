@@ -79,15 +79,13 @@ class H5Dataset(Dataset):
             if x.startswith("action_text_"):
                 action_text = str(x).replace("action_text_", "")
 
-        frame_idx = slice(0,1)
-        
+        frame_idx = slice(0,1)        
         obj_start = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_start"][frame_idx]))
         obj_end = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/obj_end"][frame_idx]))
         grasp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/grasp_pose"][frame_idx]))
         tcp_pose = Pose(torch.tensor(self.h5_file[f"traj_{idx}/obs/extra/tcp_pose"][frame_idx]))
         camera_intrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/intrinsic_cv"][frame_idx]
         camera_extrinsic = self.h5_file[f"traj_{idx}/obs/sensor_param/render_camera/extrinsic_cv"][frame_idx]
-        #print("XXX", obj_start.shape)
         
         image = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/rgb'][0]
         width, height, c = image.shape
@@ -96,10 +94,10 @@ class H5Dataset(Dataset):
         if self.augment_text is not None:
             action_text = self.augment_text(action_text)
 
-        enc = self.action_encoder.encode_trajectory
+        enc_traj = self.action_encoder.encode_trajectory
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                        camera, grasp_pose, tcp_pose,
-                                                                       action_text, enc, robot_pose=None)
+                                                                       action_text, enc_traj, robot_pose=None)
         entry = dict(prefix=prefix, suffix=token_str, camera=camera)
 
         if self.return_only_prefix:     # used only for paired dataset for setup
@@ -124,7 +122,7 @@ class H5Dataset(Dataset):
                 depth = np.clip(depth, 0, 1023)
 
             if self.augment_depth is not  None:
-                depth, suffix = self.augment_depth(depth, entry["suffix"])
+                depth, suffix = self.augment_depth(depth, entry["suffix"], self.action_encoder, camera)
                 entry["suffix"] = suffix
             
             if self.depth_to_color:
