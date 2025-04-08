@@ -16,6 +16,7 @@ from data_loader_images import ImageFolderDataset
 from data_loader_h5 import H5Dataset
 from data_loader_paired import PairedDataset
 from utils_traj_tokens import TrajectoryEncoder_xyzrotvec2
+from utils_eval import Evaluator
 from data_augmentations import augment_image_rgb, RandomizeBackgrounds, complexify_text
 
 
@@ -81,18 +82,14 @@ def get_collate_fn(processor, num_images_in_context, image_order, TORCH_DTYPE, a
     return collate_fn
 
 
-def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera):
+def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera, action_encoder):
     eval_dummy_camera.extrinsic_matrix = torch.tensor([[[1, 0, 0, 0.0], [0, 1, 0, 0], [0, 0, 1, 0]]])
-    encoder_default = TrajectoryEncoder_xyzrotvec2()
-    decoder_fn = encoder_default.decode_trajectory
+    evaluator = Evaluator(action_encoder, eval_dummy_camera)
+
     def compute_metrics(eval_pred):
-        predictions, labels = eval_pred
+        predictions, labels = eval_pred    
         metric = []
         whole_text = []
-        all_preds_pos = []
-        all_preds_orn = []
-        all_labels_pos = []
-        all_labels_orn = []
         for i in range(len(predictions)):
             prefix_len = sum(labels[i] == -100) # first x tokens are -100, end is generated
             decoded_preds = processor.decode(predictions[i, labels[i].shape[0]:], skip_special_tokens=True)
@@ -108,39 +105,14 @@ def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera):
             else:
                 whole_text.append(0)
 
-            if len(decoded_preds) == len(decoded_labels):
-                pos_data, orn_data = decoder_fn(decoded_labels, camera=eval_dummy_camera)
-                pos_pred, orn_pred = decoder_fn(decoded_preds, camera=eval_dummy_camera)
+            evaluator.evaluate(decoded_preds, decoded_labels)
 
-                # mode is cart?
-                pos_data, orn_data = pos_data[0], orn_data[0]
-                pos_pred, orn_pred = pos_pred[0], orn_pred[0]
+        final_metrics = evaluator.report_stats()
+        final_metrics["valid_samples_ratio"] = np.sum(metric) / len(metric)
+        final_metrics["whole_text_ratio"] = np.sum(whole_text) / len(whole_text)
+        evaluator.reset()
 
-                all_preds_pos.append(pos_pred.numpy())
-                all_labels_pos.append(pos_data.numpy())
-                all_preds_orn.append(R.from_quat(orn_pred.numpy(), scalar_first=True))
-                all_labels_orn.append(R.from_quat(orn_data.numpy(), scalar_first=True))
-
-        if len(all_preds_pos) == 0:
-            l2_distance = -1
-            l1_distance = -1
-            l1_degrees = -1
-            l2_degrees = -1
-        else:
-            all_preds_pos = np.array(all_preds_pos)
-            all_labels_pos = np.array(all_labels_pos)
-            
-            valid_diff = (all_labels_pos - all_preds_pos) * 100  # m to cm
-            valid_orn_diffs = [(R.inv(r1)*r2) for r1, r2 in zip(all_labels_orn, all_preds_orn)]
-            valid_orn_diffs_deg = np.array([r1.magnitude() for r1 in valid_orn_diffs])*180/np.pi
-
-            l1_distance = np.mean(np.abs(valid_diff))
-            l2_distance = np.linalg.norm(valid_diff)
-            l1_degrees = np.mean(np.abs(valid_orn_diffs_deg))
-            l2_degrees = np.linalg.norm(valid_orn_diffs_deg)
-
-        return {"valid_samples_ratio": np.sum(metric) / len(metric), "whole_text_ratio": np.sum(whole_text) / len(whole_text),
-                "L2_distance": l2_distance, "L1_distance": l1_distance, "L1_degrees": l1_degrees, "L2_degrees": l2_degrees}
+        return final_metrics
     return compute_metrics
 
 
@@ -151,22 +123,23 @@ def get_args():
     parser.add_argument("--num_images_in_context", type=int, default=1)
     parser.add_argument("--image_order", type=str, choices=["interleaved", "images_first"], default="interleaved")
     parser.add_argument("--extra_run_name", type=str, default="debug")
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--batch_size_dev", type=int, default=2)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size_dev", type=int, default=3)
     parser.add_argument("--p_background", type=float, default=0.2)
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--no_augs", action="store_true")
-    parser.add_argument("--max_tokens", type=int, default=12, help="Max tokens for generation (basically sequence length)")
+    parser.add_argument("--max_tokens", type=int, default=13, help="Max tokens for generation (basically sequence length)")
     parser.add_argument("--lr", type=float, default=3e-5)
     parser.add_argument("--warmup_ratio", type=float, default=0.05)
     parser.add_argument("--p_copy", type=float, default=0.0, help="Percentage of pairs with direct copy of images in context")
     parser.add_argument("--apply_copy_augs", action="store_true", help="Apply augmentations to the copy of the images in context")
-    parser.add_argument("--sort_by_l2_distance", action="store_true", help="Sort the images in context by L2 distance to the query image")
+    parser.add_argument("--p_sort_by_l2_distance", type=float, default=0.0, help="Sort the images in context by L2 distance to the query image for some percentage")
     parser.add_argument("--save_steps", type=int, default=350)
     parser.add_argument("--save_limit", type=int, default=5)
     parser.add_argument("--save_path", type=str, default="/work/dlclarge2/bratulic-cvla/models")
     parser.add_argument("--no_eval", action="store_true", help="Do not evaluate the model")
+    parser.add_argument("--encoder", type=str, default="xyzrotvec2", help="Encoder to use for the model")
 
 
     return parser.parse_args()
@@ -202,7 +175,7 @@ def save_hyperparams(save_path_final, save_path, args):
     os.system(f"cp /home/bratulic/git_repos/robo/cVLA/hf_image_condition.py {save_path_final}/hf_image_condition.py")
 
 
-def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera):
+def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera, action_encoder):
     # FT ONLY THE SELF-ATTENTION LAYERS
     for param in model.vision_tower.parameters():
         param.requires_grad = False
@@ -272,7 +245,7 @@ def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn,
         eval_dataset=eval_dataset,
         data_collator=collate_fn,
         args=args_jax,
-        compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_dummy_camera),
+        compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_dummy_camera, action_encoder),
     )
 
     trainer.model.config.use_cache = False
@@ -290,18 +263,20 @@ def get_datasets(args, dataset_location):
 
     bg_image_dataset = ImageFolderDataset("/tmp/indoorCVPR/Images", transform=transforms.RandomResizedCrop((448,448)))
     randomize_background = RandomizeBackgrounds(p=args.p_background, background_images=bg_image_dataset)
+    forced_image_augs = RandomizeBackgrounds(p=1.0, background_images=bg_image_dataset)
     if args.no_augs:
-        raw_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False)
+        raw_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False, 
+                                augment_rgb_forced=forced_image_augs, action_encoder=args.encoder)
     else:
         raw_dataset = H5Dataset(dataset_location, augment_rgbds=randomize_background, augment_rgb=augment_image_rgb, augment_text=None,
-                                augment_depth=None, return_depth=False)
+                                augment_depth=None, return_depth=False, augment_rgb_forced=forced_image_augs, action_encoder=args.encoder)
         
     if args.conditioning == "trajectory":
         train_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
-                                    mode="train", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, sort_by_l2_distance=args.sort_by_l2_distance)
+                                    mode="train", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, p_sort_by_l2_distance=args.p_sort_by_l2_distance)
 
         eval_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
-                                    mode="test", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, sort_by_l2_distance=args.sort_by_l2_distance)
+                                    mode="test", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, p_sort_by_l2_distance=args.p_sort_by_l2_distance)
         eval_dummy_camera = eval_dataset[0][1][0]["camera"]
     elif args.conditioning == "text":
         train_dataset = raw_dataset
@@ -310,46 +285,17 @@ def get_datasets(args, dataset_location):
 
     print("dataset_location:", dataset_location,"samples:", len(raw_dataset), "paired_samples:", len(train_dataset))
 
-    return train_dataset, eval_dataset, run_name, eval_dummy_camera
+    return train_dataset, eval_dataset, run_name, eval_dummy_camera, raw_dataset.action_encoder
 
 
-def main():
-
+if __name__ == "__main__":
+    
     # SETTING UP THE PATHS AND ARGS
     dataset_location = Path("/tmp/clevr-act-7-depth")
     current_time =  datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     args = get_args()
 
-    # SETTING UP THE DATASETS
-    train_dataset, eval_dataset, run_name, eval_dummy_camera = get_datasets(args, dataset_location)
-    
-    # SETTING UP THE SAVE PATHS
-    save_path_final = Path(args.save_path) / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
-    save_path = Path("/tmp/bratulic_cvla") / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
-    save_hyperparams(save_path_final, save_path, args)
-
-    # SETTING UP THE MODEL
-    DEVICE, TORCH_DTYPE = torch.device('cuda'), torch.bfloat16
-    processor, model = get_model(model_type=args.model_id, TORCH_DTYPE=TORCH_DTYPE, DEVICE=DEVICE, checkpoint=args.checkpoint)
-    collate_fn = get_collate_fn(processor, args.num_images_in_context, args.image_order, TORCH_DTYPE, args, DEVICE)
-
-    # SETTING UP THE TRAINER
-    trainer = get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera)
-    
-    # TRAINING THE MODEL
-    try:
-        trainer.train()
-    except KeyboardInterrupt:
-        print("Training interrupted")
-    
-    # TRANSFER THE MODEL TO FINAL LOCATION
-    os.system(f"mv {save_path}/* {save_path_final}/")
-
-if __name__ == "__main__":
-
-    # DATA COPY-PASTING AND CHECK
-    
     if not os.path.exists('/tmp/indoorCVPR') or not os.path.exists('/tmp/clevr-act-7-depth'):
         cmd1 = (
         "rsync -a --progress /work/dlclarge2/bratulic-cvla/indoorCVPR_09.tar /tmp/ && "
@@ -378,4 +324,27 @@ if __name__ == "__main__":
     else:
         print('Data already exists')
 
-    main()
+    # SETTING UP THE DATASETS
+    train_dataset, eval_dataset, run_name, eval_dummy_camera, action_encoder = get_datasets(args, dataset_location)
+    
+    # SETTING UP THE SAVE PATHS
+    save_path_final = Path(args.save_path) / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
+    save_path = Path("/tmp/bratulic_cvla") / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
+    save_hyperparams(save_path_final, save_path, args)
+
+    # SETTING UP THE MODEL
+    DEVICE, TORCH_DTYPE = torch.device('cuda'), torch.bfloat16
+    processor, model = get_model(model_type=args.model_id, TORCH_DTYPE=TORCH_DTYPE, DEVICE=DEVICE, checkpoint=args.checkpoint)
+    collate_fn = get_collate_fn(processor, args.num_images_in_context, args.image_order, TORCH_DTYPE, args, DEVICE)
+
+    # SETTING UP THE TRAINER
+    trainer = get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera, action_encoder)
+    
+    # TRAINING THE MODEL
+    try:
+        trainer.train()
+    except KeyboardInterrupt:
+        print("Training interrupted")
+    
+    # TRANSFER THE MODEL TO FINAL LOCATION
+    os.system(f"mv {save_path}/* {save_path_final}/")

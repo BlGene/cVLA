@@ -7,15 +7,9 @@ from PIL import Image
 from collections import defaultdict
 import numpy as np
 import pickle
-from mani_skill.utils.structs import Pose
-from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
 from utils_trajectory import DummyCamera
 from torch.utils.data import Dataset
 from data_augmentations import depth_to_color
-from utils_traj_tokens import decode_caption_xyzrotvec2
-
-enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 
 import matplotlib.pyplot as plt
 
@@ -40,8 +34,9 @@ class PairedDataset(Dataset):
                  load_presampled_pairs_path=None,
                  p_copy=0.0,
                  apply_copy_augs=False,
-                 sort_by_l2_distance=False,
+                 p_sort_by_l2_distance=0.0,
                  plot_statistics=False,
+                 sort_criteria="camera_position",   # camera or trajectory coords
                  mode="train"):
         self.raw_dataset = raw_dataset
         self.num_images_in_context = num_images_in_context
@@ -49,7 +44,7 @@ class PairedDataset(Dataset):
         self.load_presampled_pairs_path = load_presampled_pairs_path
         self.p_copy = p_copy
         self.apply_copy_augs = apply_copy_augs
-        self.sort_by_l2_distance = sort_by_l2_distance
+        self.p_sort_by_l2_distance = p_sort_by_l2_distance
         assert self.image_order in ["interleaved", "images_first"], \
             "image_order must be either 'interleaved' or 'images_first'"
         
@@ -164,51 +159,47 @@ class PairedDataset(Dataset):
         if np.random.rand() < self.p_copy:
             # Copy sampling: context and query are exactly the same image.
             chosen_idx = np.random.choice(self.task_lookup[task]["images"], 1, replace=False)[0]
-            image, entry = self.raw_dataset[chosen_idx]
+            image, entry = self.raw_dataset.getitem_func(chosen_idx)   # self.raw_dataset[chosen_idx]
             images = [image] * (self.num_images_in_context + 1)
             entries = [entry] * (self.num_images_in_context + 1)
             # Optionally, apply augmentation on the copies
             if self.apply_copy_augs:
-                # TODO: Add your augmentation (cropping/resizing) to the copied images here.
-                pass
+                augmented_copy = self.raw_dataset.getitem_func(chosen_idx, force_augs=True)
+                images[-1] = augmented_copy[0]
+                
+        elif np.random.rand() < self.p_sort_by_l2_distance:
+            # Sample one query image, then choose context images based on similarity (L2 distance)
+            task_img_indices = self.task_lookup[task]["images"]
+            query_pos = np.random.choice(len(task_img_indices), 1, replace=False)[0]
+            # Get the distances of all images to the chosen query image
+            distances = self.task_images_camera_similarities[task][query_pos]
+            # Sort indices; skip the query itself (first index after sorting should be itself)
+            sorted_indices = np.argsort(distances)
+            context_indices = sorted_indices[1:self.num_images_in_context + 1]
+            
+            images, entries = [], []
+            for i in context_indices:
+                img_idx = task_img_indices[i]
+                image, entry = self.raw_dataset[img_idx]
+                images.append(image)
+                entries.append(entry)
+            
+            # Get the query image and append it at the end
+            query_img_idx = task_img_indices[query_pos]
+            query_image, query_entry = self.raw_dataset[query_img_idx]
+            images.append(query_image)
+            entries.append(query_entry)
+        
         else:
-            if self.sort_by_l2_distance:
-                # Sample one query image, then choose context images based on similarity (L2 distance)
-                task_img_indices = self.task_lookup[task]["images"]
-                query_pos = np.random.choice(len(task_img_indices), 1, replace=False)[0]
-                # Get the distances of all images to the chosen query image
-                distances = self.task_images_camera_similarities[task][query_pos]
-                # Sort indices; skip the query itself (first index after sorting should be itself)
-                sorted_indices = np.argsort(distances)
-                context_indices = sorted_indices[1:self.num_images_in_context + 1]
-                # print camera positions for query and context images
-                print("Query camera position:", self.data_properties[task][query_pos])
-                print("Context camera positions:")
-                for i in context_indices:
-                    print(self.data_properties[task][i])
-                
-                images, entries = [], []
-                for i in context_indices:
-                    img_idx = task_img_indices[i]
-                    image, entry = self.raw_dataset[img_idx]
-                    images.append(image)
-                    entries.append(entry)
-                
-                # Get the query image and append it at the end
-                query_img_idx = task_img_indices[query_pos]
-                query_image, query_entry = self.raw_dataset[query_img_idx]
-                images.append(query_image)
-                entries.append(query_entry)
-            else:
-                # Uniformly sample random images from the task (without sorting by pose)
-                task_img_indices = self.task_lookup[task]["images"]
-                # Sample without replacement the required number of images (context + query)
-                chosen_indices = np.random.choice(task_img_indices, self.num_images_in_context + 1, replace=False)
-                images, entries = [], []
-                for idx in chosen_indices:
-                    image, entry = self.raw_dataset[idx]
-                    images.append(image)
-                    entries.append(entry)
+            # Uniformly sample random images from the task (without sorting by pose)
+            task_img_indices = self.task_lookup[task]["images"]
+            # Sample without replacement the required number of images (context + query)
+            chosen_indices = np.random.choice(task_img_indices, self.num_images_in_context + 1, replace=False)
+            images, entries = [], []
+            for idx in chosen_indices:
+                image, entry = self.raw_dataset[idx]
+                images.append(image)
+                entries.append(entry)
         
         # Optionally, you can also return additional info (indices or similarity metrics) if needed.
         return images, entries

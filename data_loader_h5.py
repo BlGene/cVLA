@@ -9,17 +9,15 @@ import numpy as np
 import pickle
 from mani_skill.utils.structs import Pose
 from mani_skill.examples.utils_traj_tokens import to_prefix_suffix
-from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction
+from mani_skill.examples.utils_traj_tokens import getActionEncDecFunction, getActionEncInstance
 from utils_trajectory import DummyCamera
 from torch.utils.data import Dataset
 from data_augmentations import depth_to_color
 
-enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
-
 
 class H5Dataset(Dataset):
     def __init__(self, h5_file_or_dir, return_depth=False, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, depth_to_color=True,
-                 return_only_prefix=False, limit_samples=None):
+                 return_only_prefix=False, limit_samples=None, augment_rgb_forced=None, action_encoder="xyzrotvec-cam-proj2"):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -45,8 +43,11 @@ class H5Dataset(Dataset):
         self.augment_text = augment_text
         self.augment_depth = augment_depth
         self.depth_to_color = depth_to_color
+        self.augment_rgb_forced = augment_rgb_forced        # only for copy-pasting when needed
 
         self.return_only_prefix = return_only_prefix        # used only for paired dataset for setup
+
+        self.action_encoder = getActionEncInstance(action_encoder)
 
     def __len__(self):
         return self.h5_file_len
@@ -69,7 +70,7 @@ class H5Dataset(Dataset):
         return self.getitem_func(random_idx)
     
         
-    def getitem_func(self, idx: int):
+    def getitem_func(self, idx: int, force_augs=False):
         action_text = None
         for x in self.h5_file[f'traj_{idx}/obs/extra'].keys():
             if x.startswith("action_text_"):
@@ -94,7 +95,7 @@ class H5Dataset(Dataset):
 
         prefix, token_str, curve_3d, orns_3d, info = to_prefix_suffix(obj_start, obj_end,
                                                                        camera, grasp_pose, tcp_pose,
-                                                                       action_text, enc_func, robot_pose=None)
+                                                                       action_text, self.action_encoder.encode_trajectory, robot_pose=None)
         entry = dict(prefix=prefix, suffix=token_str, camera=camera)
 
         if self.return_only_prefix:     # used only for paired dataset for setup
@@ -104,11 +105,14 @@ class H5Dataset(Dataset):
 
         depth = None
         seg = None
-        if self.augment_rgbds is not None:
+        if self.augment_rgbds is not None or force_augs:
             depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0][:,:,0]
             depth = np.clip(depth, 0, 1023)
             seg = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/segmentation'][0]
-            image = self.augment_rgbds(image, depth, seg)
+            if force_augs:
+                image = self.augment_rgb_forced(image, depth, seg)
+            else:
+                image = self.augment_rgbds(image, depth, seg)
 
         if self.augment_rgb is not None:
             image = self.augment_rgb(image)
@@ -129,69 +133,5 @@ class H5Dataset(Dataset):
             return [depth, image], entry
         
         return Image.fromarray(image), entry
-
-
-
-class PairedH5Dataset(Dataset):
-    def __init__(self, h5_dataset, num_images_in_context=1, image_order="interleaved", load_presampled_pairs_path=None):
-        self.h5_dataset = h5_dataset
-        self.num_images_in_context = num_images_in_context
-        self.image_order = image_order
-        self.load_presampled_pairs_path = load_presampled_pairs_path
-        assert self.image_order in ["interleaved", "images_first"]  # interleaved is image, text, image..., images_first is image, image, text,...
-
-        if self.load_presampled_pairs_path is not None and load_presampled_pairs_path.exists():
-            print(f"Loading pre-sampled pairs from {load_presampled_pairs_path}")
-            # load presampled pickle and save it to self.task_lookup
-            with open(load_presampled_pairs_path, "rb") as f:
-                self.task_lookup = pickle.load(f)
-        else:
-
-            # setup - define a lookup table for image idx and tasks they are performing
-            self.h5_dataset.return_only_prefix = True
-            self.task_lookup = defaultdict(list)
-            for i in range(len(self.h5_dataset)):
-                entry = self.h5_dataset[i]
-                prefix = entry["prefix"].split("<")[0].strip()
-                self.task_lookup[prefix].append(i)
-
-            self.h5_dataset.return_only_prefix = False
-
-            # if load_presampled_pairs_path is not None and does not exist, save the pre-sampled pairs
-            if self.load_presampled_pairs_path is not None and not load_presampled_pairs_path.exists():
-                print(f"Saving pre-sampled pairs to {load_presampled_pairs_path}")
-                with open(load_presampled_pairs_path, "wb") as f:
-                    pickle.dump(self.task_lookup, f)
-
-        # if there are tasks with only one image, we need to remove them
-        self.task_lookup = {k:v for k,v in self.task_lookup.items() if len(v) > 1}
-
-        self.paired_len = sum([len(v) for v in self.task_lookup.values()])  # number of possible pairs
-
-        # print statistics about the dataset
-        print("Statistics about the paired dataset:")
-        print(f"Number of tasks with more than one image: {len(self.task_lookup)}, total number of pairs: {self.paired_len}")
-        # print(f"Tasks and number of images: {[(k, len(v)) for k,v in self.task_lookup.items()]}")
-
-    def __len__(self):
-        return self.paired_len
-            
-    def __getitem__(self, idx: int):
-        if idx < 0 or idx >= len(self):
-            raise IndexError("Index out of range")
-        
-        # sample a task                 # TODO: Change to weighted sampling, now it is only uniform
-        task = np.random.choice(list(self.task_lookup.keys()))
-
-        # sample random images to be put into context
-        context_idx = np.random.choice(self.task_lookup[task], self.num_images_in_context + 1, replace=False)
-        images, entries = [], []
-        for i in context_idx:
-            image, entry = self.h5_dataset[i]
-            images.append(image)
-            entries.append(entry)
-        
-        return images, entries
-
 
 
