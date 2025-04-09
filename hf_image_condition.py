@@ -126,6 +126,7 @@ def get_args():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--batch_size_dev", type=int, default=3)
     parser.add_argument("--p_background", type=float, default=0.2)
+    parser.add_argument("--max_steps", type=int, default=-1, help="Max steps for training, -1 for using one epoch of defined data")
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--no_augs", action="store_true")
@@ -135,11 +136,15 @@ def get_args():
     parser.add_argument("--p_copy", type=float, default=0.0, help="Percentage of pairs with direct copy of images in context")
     parser.add_argument("--apply_copy_augs", action="store_true", help="Apply augmentations to the copy of the images in context")
     parser.add_argument("--p_sort_by_l2_distance", type=float, default=0.0, help="Sort the images in context by L2 distance to the query image for some percentage")
+    parser.add_argument("--sort_criteria", type=str, choices=["camera_position", "trajectory_shape"], default="camera_position", help="Sort the images in context by camera position or trajectory shape")
     parser.add_argument("--save_steps", type=int, default=350)
     parser.add_argument("--save_limit", type=int, default=5)
     parser.add_argument("--save_path", type=str, default="/work/dlclarge2/bratulic-cvla/models")
     parser.add_argument("--no_eval", action="store_true", help="Do not evaluate the model")
-    parser.add_argument("--encoder", type=str, default="xyzrotvec2", help="Encoder to use for the model")
+    parser.add_argument("--encoder", type=str, default="xyzrotvec-cam-1024xy", 
+                        choices=["xyzrotvec-cam-512xy128d", "xyzrotvec-cam-1024xy", "xyzrotvec-cam-proj2", "xyzrotvec-cam-512xy", 
+                                 "xyzrotvec-cam-256xy", "xyzrotvec-cam-128xy", "xyzrotvec-cam-512xy256d" ], help="Encoder to use for the model")
+    parser.add_argument("--ft_more_params", action="store_true", help="Fine-tune more parameters in the model")
 
 
     return parser.parse_args()
@@ -182,19 +187,29 @@ def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn,
 
     for param in model.multi_modal_projector.parameters():
         param.requires_grad = False
-        
+            
     for name, param in model.named_parameters():
         if param.requires_grad == True:
-            if "self_attn" in name:
-                param.requires_grad = True
+            if args.ft_more_params:
+                if "self_attn" in name or "mlp" in name:
+                    param.requires_grad = True
+                    print("set to True:", name)
+                else:
+                    param.requires_grad = False
             else:
-                param.requires_grad = False
+                if "self_attn" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
 
     TRAIN_EXAMPLES = len(train_dataset) * args.num_repeats
     BATCH_SIZE = args.batch_size
     BATCH_SIZE_DEV = args.batch_size_dev # on l40 was 8
     GRAD_ACCUM = int(round(BATCH_SIZE / BATCH_SIZE_DEV))
-    TRAIN_STEPS = (TRAIN_EXAMPLES // BATCH_SIZE)
+    if args.max_steps > 0:
+        TRAIN_STEPS = args.max_steps
+    else:
+        TRAIN_STEPS = (TRAIN_EXAMPLES // BATCH_SIZE)
     SEQLEN = args.max_tokens
     SAVE_STEPS = args.save_steps
     SAVE_LIMIT = args.save_limit
@@ -257,8 +272,9 @@ def get_datasets(args, dataset_location):
     # SETTING UP THE DATASET
     num_images_in_context = args.num_images_in_context
     image_order = args.image_order
-    run_name = f"_imagesInContext_{num_images_in_context}_promptOrder_{image_order}"
+    run_name = f"_img_{num_images_in_context}_pr_{image_order}_enc_{args.encoder}"
     load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_new.pkl"
+    presampled_eval_sequences_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_pCopy{args.p_copy}_pSorting{args.p_sort_by_l2_distance}_sortBY{args.sort_criteria}_presampled_eval_sequences.pkl"
     run_name += f"maxTokens{args.max_tokens}_lr{args.lr}" + args.extra_run_name
 
     bg_image_dataset = ImageFolderDataset("/tmp/indoorCVPR/Images", transform=transforms.RandomResizedCrop((448,448)))
@@ -271,12 +287,17 @@ def get_datasets(args, dataset_location):
         raw_dataset = H5Dataset(dataset_location, augment_rgbds=randomize_background, augment_rgb=augment_image_rgb, augment_text=None,
                                 augment_depth=None, return_depth=False, augment_rgb_forced=forced_image_augs, action_encoder=args.encoder)
         
+    raw_dataset_for_eval = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, 
+                                     return_depth=False, action_encoder=args.encoder)
+        
     if args.conditioning == "trajectory":
         train_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
-                                    mode="train", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, p_sort_by_l2_distance=args.p_sort_by_l2_distance)
+                                    mode="train", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, p_sort_by_l2_distance=args.p_sort_by_l2_distance, 
+                                    sort_criteria=args.sort_criteria, presampled_path=None)
 
-        eval_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
-                                    mode="test", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, p_sort_by_l2_distance=args.p_sort_by_l2_distance)
+        eval_dataset = PairedDataset(raw_dataset_for_eval, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
+                                    mode="test", p_copy=0, apply_copy_augs=False, p_sort_by_l2_distance=0, 
+                                    sort_criteria=args.sort_criteria, presampled_path=presampled_eval_sequences_path)
         eval_dummy_camera = eval_dataset[0][1][0]["camera"]
     elif args.conditioning == "text":
         train_dataset = raw_dataset
@@ -343,7 +364,7 @@ if __name__ == "__main__":
     # TRAINING THE MODEL
     try:
         trainer.train()
-    except KeyboardInterrupt:
+    except:
         print("Training interrupted")
     
     # TRANSFER THE MODEL TO FINAL LOCATION

@@ -77,8 +77,15 @@ class JSONLDataset(Dataset):
         if self.return_only_prefix:     # used only for paired dataset for setup
             entry["prefix"] = clean_prompt(entry["prefix"])
             all_entry = self.all_entries[idx]
-            entry["camera_intrinsic"] = all_entry["camera_intrinsic"]
-            entry["camera_extrinsic"] = all_entry["camera_extrinsic"]
+            camera_extrinsic = all_entry["camera_extrinsic"]
+            camera_intrinsic = all_entry["camera_intrinsic"]
+            image_path = os.path.join(self.image_directory_path, entry['image'])
+            image = Image.open(image_path)
+            image_width, image_height = image.size # must be after crop
+            camera = DummyCamera(camera_intrinsic, camera_extrinsic, width=image_width, height=image_height)
+            entry["camera"] = camera
+            entry["camera_intrinsic"] = camera_intrinsic
+            entry["camera_extrinsic"] = camera_extrinsic
             return entry
 
         image_path = os.path.join(self.image_directory_path, entry['image'])

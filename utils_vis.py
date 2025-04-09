@@ -4,7 +4,7 @@ import base64
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
-from utils_traj_tokens import decode_caption_xyzrotvec2, decode_trajectory_xyzrotvec2
+from utils_traj_tokens import decode_caption_xyzrotvec2, decode_trajectory_xyzrotvec2, getActionEncInstance
 from utils_trajectory import DummyCamera, project_points, convert_to_tensor
 from PIL import Image
 import torch
@@ -98,12 +98,18 @@ def draw_coordinate_frame(label, camera, ax):
 
 
 
-def render_example(image, label, prediction=None, text=None, camera=None):
+def render_example(image, label, prediction=None, text=None, camera=None, action_encoder_data="xyzrotvec-cam-1024xy", action_encoder_model="xyzrotvec-cam-1024xy"):
     """render examples, for use in notebook:
     
         from IPython.display import display, HTML
         display(HTML(html_imgs))
     """
+    encoder_data = getActionEncInstance(action_encoder_data)
+    decode_fn_data = encoder_data.decode_caption
+    
+    encoder_model = getActionEncInstance(action_encoder_model)
+    decode_fn_model = encoder_model.decode_caption
+
     if isinstance(image, Image.Image):
         image_width, image_height = image.size
     elif isinstance(image, np.ndarray):
@@ -128,7 +134,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     ax.axis('off')
     if camera:
         try:
-            curve_25d, quat_c = decode_caption_xyzrotvec2(label, camera) 
+            curve_25d, quat_c = decode_fn_data(label, camera) 
             curve_2d  = curve_25d[:, :2]
             ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
             if draw_label_coords:
@@ -146,7 +152,7 @@ def render_example(image, label, prediction=None, text=None, camera=None):
     if prediction:
         html_text += f'</br></br>{html.escape("pred: "+prediction)}'
         try:
-            curve_2d_gt, quat_c = decode_caption_xyzrotvec2(prediction, camera)
+            curve_2d_gt, quat_c = decode_fn_model(prediction, camera)
             ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
             ax.scatter(curve_2d_gt[0, 0], curve_2d_gt[0, 1], color='red')
             if draw_pred_coords:
