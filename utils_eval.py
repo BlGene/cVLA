@@ -25,9 +25,14 @@ def check_if_valid(decoded_preds, decoded_labels):
 
 
 class Evaluator:
-    def __init__(self, encoder, eval_dummy_camera):
-        self.decode_caption = encoder.decode_caption
-        self.decode_trajectory = encoder.decode_trajectory
+    def __init__(self, encoder, eval_dummy_camera, encoder_labels=None):
+        self.decode_caption_labels = encoder.decode_caption
+        self.decode_caption_preds = encoder.decode_caption
+        self.decode_trajectory_labels = encoder.decode_trajectory
+        self.decode_trajectory_preds = encoder.decode_trajectory
+        if encoder_labels is not None:
+            self.decode_caption_labels = encoder_labels.decode_caption
+            self.decode_trajectory_labels = encoder_labels.decode_trajectory
         self.eval_dummy_camera = eval_dummy_camera
         self.eval_dummy_camera.extrinsic_matrix = torch.tensor([[[1, 0, 0, 0.0], [0, 1, 0, 0], [0, 0, 1, 0]]])
         self.h_image = self.eval_dummy_camera.height
@@ -56,13 +61,13 @@ class Evaluator:
 
         for mode in ("cam", "cart"):    
             if mode == "cam":
-                dec_func = self.decode_caption
+                dec_func_preds, dec_func_lab = self.decode_caption_preds, self.decode_caption_labels
             elif mode == "cart":
-                dec_func = self.decode_trajectory
+                dec_func_preds, dec_func_lab = self.decode_trajectory_preds, self.decode_trajectory_labels
 
             try:
-                pos_data, orn_data = dec_func(decoded_labels, camera=self.eval_dummy_camera)
-                pos_pred, orn_pred = dec_func(decoded_preds, camera=self.eval_dummy_camera)
+                pos_data, orn_data = dec_func_lab(decoded_labels, camera=self.eval_dummy_camera)
+                pos_pred, orn_pred = dec_func_preds(decoded_preds, camera=self.eval_dummy_camera)
             except ValueError:
                 print("skipping")
                 continue

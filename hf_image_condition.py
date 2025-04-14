@@ -15,9 +15,36 @@ from transformers import PaliGemmaProcessor, PaliGemmaForConditionalGeneration, 
 from data_loader_images import ImageFolderDataset
 from data_loader_h5 import H5Dataset
 from data_loader_paired import PairedDataset
+from data_loader_jsonl import JSONLDataset
 from utils_traj_tokens import TrajectoryEncoder_xyzrotvec2
 from utils_eval import Evaluator
 from data_augmentations import augment_image_rgb, RandomizeBackgrounds, complexify_text
+
+
+class MultiEvalSeq2SeqTrainer(Seq2SeqTrainer):
+    def evaluate(self, eval_dataset=None, metric_key_prefix="eval", **kwargs):
+        # Evaluate on synthetic dataset (default eval_dataset)
+        self.compute_metrics = self.compute_metrics_sim
+        metrics_synth = super().evaluate(
+            eval_dataset=eval_dataset,
+            metric_key_prefix="eval_data_sim",
+            **kwargs,
+        )
+
+        # Evaluate on real dataset if it's set
+        if hasattr(self, "eval_dataset_real"):
+            self.compute_metrics = self.compute_metrics_real
+            metrics_real = super().evaluate(
+                eval_dataset=self.eval_dataset_real,
+                metric_key_prefix="eval_data_real",
+                **kwargs,
+            )
+            metrics_synth.update(metrics_real)
+
+        print("metrics_synth:", metrics_synth)
+
+        return metrics_synth
+
 
 
 def extract_tokens(text):
@@ -82,9 +109,9 @@ def get_collate_fn(processor, num_images_in_context, image_order, TORCH_DTYPE, a
     return collate_fn
 
 
-def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera, action_encoder):
+def get_compute_metrics_fn(processor, max_tokens, eval_dummy_camera, action_encoder, action_encoder_labels=None):
     eval_dummy_camera.extrinsic_matrix = torch.tensor([[[1, 0, 0, 0.0], [0, 1, 0, 0], [0, 0, 1, 0]]])
-    evaluator = Evaluator(action_encoder, eval_dummy_camera)
+    evaluator = Evaluator(action_encoder, eval_dummy_camera, encoder_labels=action_encoder_labels)
 
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred    
@@ -141,10 +168,11 @@ def get_args():
     parser.add_argument("--save_limit", type=int, default=5)
     parser.add_argument("--save_path", type=str, default="/work/dlclarge2/bratulic-cvla/models")
     parser.add_argument("--no_eval", action="store_true", help="Do not evaluate the model")
-    parser.add_argument("--encoder", type=str, default="xyzrotvec-cam-1024xy", 
+    parser.add_argument("--encoder", type=str, default="xyzrotvec-cam-512xy128d", 
                         choices=["xyzrotvec-cam-512xy128d", "xyzrotvec-cam-1024xy", "xyzrotvec-cam-proj2", "xyzrotvec-cam-512xy", 
                                  "xyzrotvec-cam-256xy", "xyzrotvec-cam-128xy", "xyzrotvec-cam-512xy256d" ], help="Encoder to use for the model")
     parser.add_argument("--ft_more_params", action="store_true", help="Fine-tune more parameters in the model")
+    parser.add_arugment("--double_eval", action="store_true", help="Evaluate on both real and synthetic datasets")
 
 
     return parser.parse_args()
@@ -180,7 +208,8 @@ def save_hyperparams(save_path_final, save_path, args):
     os.system(f"cp /home/bratulic/git_repos/robo/cVLA/hf_image_condition.py {save_path_final}/hf_image_condition.py")
 
 
-def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera, action_encoder):
+def get_trainer(args, model, processor, train_dataset, eval_sim_dataset, eval_real_dataset, collate_fn, save_path, eval_sim_dummy_camera, 
+                eval_real_dummy_camera, action_encoder, eval_sim_action_encoder, eval_real_action_encoder):
     # FT ONLY THE SELF-ATTENTION LAYERS
     for param in model.vision_tower.parameters():
         param.requires_grad = False
@@ -254,14 +283,37 @@ def get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn,
         do_eval=not args.no_eval,
     )
 
-    trainer = Seq2SeqTrainer(
-        model=model,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=collate_fn,
-        args=args_jax,
-        compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_dummy_camera, action_encoder),
-    )
+    #trainer = Seq2SeqTrainer(
+    #    model=model,
+    #    train_dataset=train_dataset,
+    #    eval_dataset=eval_dataset,
+    #    data_collator=collate_fn,
+    #    args=args_jax,
+    #    compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_dummy_camera, action_encoder, eval_action_encoder),
+    #)
+
+    if args.double_eval:
+        trainer = MultiEvalSeq2SeqTrainer(
+            model=model,
+            train_dataset=train_dataset,
+            eval_dataset=eval_sim_dataset,
+            data_collator=collate_fn,
+            args=args_jax,
+            compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_sim_dummy_camera, action_encoder, eval_sim_action_encoder),
+        )
+
+        trainer.eval_dataset_real = eval_real_dataset
+        trainer.compute_metrics_real = get_compute_metrics_fn(processor, SEQLEN, eval_real_dummy_camera, action_encoder, eval_real_action_encoder)
+        trainer.compute_metrics_sim = get_compute_metrics_fn(processor, SEQLEN, eval_sim_dummy_camera, action_encoder, eval_sim_action_encoder)
+    else:
+        trainer = Seq2SeqTrainer(
+            model=model,
+            train_dataset=train_dataset,
+            eval_dataset=eval_real_dataset,
+            data_collator=collate_fn,
+            args=args_jax,
+            compute_metrics=get_compute_metrics_fn(processor, SEQLEN, eval_real_dummy_camera, action_encoder, eval_real_action_encoder),
+        )
 
     trainer.model.config.use_cache = False
 
@@ -274,7 +326,7 @@ def get_datasets(args, dataset_location):
     image_order = args.image_order
     run_name = f"_img_{num_images_in_context}_pr_{image_order}_enc_{args.encoder}"
     load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_new.pkl"
-    presampled_eval_sequences_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_pCopy{args.p_copy}_pSorting{args.p_sort_by_l2_distance}_sortBY{args.sort_criteria}_presampled_eval_sequences.pkl"
+    # presampled_eval_sequences_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{run_name}_pCopy{args.p_copy}_pSorting{args.p_sort_by_l2_distance}_sortBY{args.sort_criteria}_presampled_eval_sequences.pkl"
     run_name += f"maxTokens{args.max_tokens}_lr{args.lr}" + args.extra_run_name
 
     bg_image_dataset = ImageFolderDataset("/tmp/indoorCVPR/Images", transform=transforms.RandomResizedCrop((448,448)))
@@ -287,26 +339,67 @@ def get_datasets(args, dataset_location):
         raw_dataset = H5Dataset(dataset_location, augment_rgbds=randomize_background, augment_rgb=augment_image_rgb, augment_text=None,
                                 augment_depth=None, return_depth=False, augment_rgb_forced=forced_image_augs, action_encoder=args.encoder)
         
-    raw_dataset_for_eval = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, 
-                                     return_depth=False, action_encoder=args.encoder)
-        
+    
     if args.conditioning == "trajectory":
         train_dataset = PairedDataset(raw_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
                                     mode="train", p_copy=args.p_copy, apply_copy_augs=args.apply_copy_augs, p_sort_by_l2_distance=args.p_sort_by_l2_distance, 
                                     sort_criteria=args.sort_criteria, presampled_path=None)
-
-        eval_dataset = PairedDataset(raw_dataset_for_eval, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
+        
+        eval_dataset_location  = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-simple-v4")
+        eval_run_name = f"_img_{num_images_in_context}_pr_{image_order}_enc_xyzrotvec-cam-1024xy"
+        load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"{eval_dataset_location.name}_dataset_{eval_run_name}_new.pkl"
+        presampled_eval_sequences_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"{eval_dataset_location.name}_{eval_run_name}_pCopy0_pSorting0_presampled_eval_sequences.pkl"
+        
+        real_raw_eval_dataset = JSONLDataset(
+                jsonl_file_path=f"{eval_dataset_location}/_annotations.valid.jsonl",
+                image_directory_path=f"{eval_dataset_location}/dataset",
+                clean_prompt=True,
+                return_depth=False,
+                action_encoder="xyzrotvec-cam-1024xy",
+            )
+        
+        eval_real_dataset = PairedDataset(real_raw_eval_dataset, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=load_presampled_pairs_path,
                                     mode="test", p_copy=0, apply_copy_augs=False, p_sort_by_l2_distance=0, 
                                     sort_criteria=args.sort_criteria, presampled_path=presampled_eval_sequences_path)
-        eval_dummy_camera = eval_dataset[0][1][0]["camera"]
+        eval_real_dummy_camera = eval_real_dataset[0][1][0]["camera"]
+        eval_real_action_encoder = real_raw_eval_dataset.action_encoder
+
+        sim_raw_dataset_for_eval = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, 
+                                     return_depth=False, action_encoder=args.encoder)
+        sim_run_name = f"_img_{num_images_in_context}_pr_{image_order}_enc_{args.encoder}"
+        sim_load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{sim_run_name}_new.pkl"
+        sim_presampled_eval_sequences_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"train_dataset_{sim_run_name}_pCopy0_pSorting0_presampled_eval_sequences.pkl"
+
+        eval_sim_dataset = PairedDataset(sim_raw_dataset_for_eval, num_images_in_context=num_images_in_context, image_order=image_order, load_presampled_pairs_path=sim_load_presampled_pairs_path,
+                                    mode="test", p_copy=0, apply_copy_augs=False, p_sort_by_l2_distance=0, 
+                                    sort_criteria=args.sort_criteria, presampled_path=sim_presampled_eval_sequences_path)
+        
+        eval_sim_dummy_camera = eval_sim_dataset[0][1][0]["camera"]
+        eval_sim_action_encoder = sim_raw_dataset_for_eval.action_encoder
+
     elif args.conditioning == "text":
         train_dataset = raw_dataset
-        eval_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False, limit_samples=200)
-        eval_dummy_camera = eval_dataset[0][1]["camera"]
+        sim_eval_dataset = H5Dataset(dataset_location, augment_rgbds=None, augment_rgb=None, augment_text=None, augment_depth=None, return_depth=False, limit_samples=200, 
+                                 action_encoder=args.encoder)
+        eval_sim_dummy_camera = eval_sim_dataset[0][1]["camera"]
+        eval_sim_action_encoder = None
+        eval_dataset_location  = Path("/data/lmbraid19/argusm/datasets/clevr-real-block-simple-v4")
+        eval_real_dataset = JSONDataset(
+            jsonl_file_path=f"{eval_dataset_location}/_annotations.valid.jsonl",
+            image_directory_path=f"{eval_dataset_location}/dataset",
+            clean_prompt=True,
+            return_depth=False,
+            action_encoder="xyzrotvec-cam-1024xy",
+        )
+        eval_real_dummy_camera = eval_real_dataset[0][1]["camera"]
+        eval_real_action_encoder = eval_real_dataset.action_encoder
+
+    else:
+        raise ValueError(f"Unknown conditioning type: {args.conditioning}")
 
     print("dataset_location:", dataset_location,"samples:", len(raw_dataset), "paired_samples:", len(train_dataset))
 
-    return train_dataset, eval_dataset, run_name, eval_dummy_camera, raw_dataset.action_encoder
+    return train_dataset, eval_sim_dataset, eval_real_dataset, run_name, eval_sim_dummy_camera,  eval_real_dummy_camera, raw_dataset.action_encoder, eval_sim_action_encoder, eval_real_action_encoder
 
 
 if __name__ == "__main__":
@@ -346,7 +439,7 @@ if __name__ == "__main__":
         print('Data already exists')
 
     # SETTING UP THE DATASETS
-    train_dataset, eval_dataset, run_name, eval_dummy_camera, action_encoder = get_datasets(args, dataset_location)
+    train_dataset, eval_sim_dataset, eval_real_dataset, run_name, eval_sim_dummy_camera, eval_real_dummy_camera, action_encoder, eval_sim_action_encoder, eval_real_action_encoder = get_datasets(args, dataset_location)
     
     # SETTING UP THE SAVE PATHS
     save_path_final = Path(args.save_path) / (str(Path(dataset_location).stem) + run_name + "_" + current_time)
@@ -359,13 +452,13 @@ if __name__ == "__main__":
     collate_fn = get_collate_fn(processor, args.num_images_in_context, args.image_order, TORCH_DTYPE, args, DEVICE)
 
     # SETTING UP THE TRAINER
-    trainer = get_trainer(args, model, processor, train_dataset, eval_dataset, collate_fn, save_path, eval_dummy_camera, action_encoder)
+    trainer = get_trainer(args, model, processor, train_dataset, eval_sim_dataset, eval_real_dataset, collate_fn, save_path, eval_sim_dummy_camera, eval_real_dummy_camera, action_encoder, eval_sim_action_encoder, eval_real_action_encoder)
     
     # TRAINING THE MODEL
-    try:
-        trainer.train()
-    except:
-        print("Training interrupted")
+    #try:
+    trainer.train()
+    #except:
+    #    print("Training interrupted")
     
     # TRANSFER THE MODEL TO FINAL LOCATION
     os.system(f"mv {save_path}/* {save_path_final}/")
