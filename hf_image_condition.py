@@ -172,7 +172,7 @@ def get_args():
                         choices=["xyzrotvec-cam-512xy128d", "xyzrotvec-cam-1024xy", "xyzrotvec-cam-proj2", "xyzrotvec-cam-512xy", 
                                  "xyzrotvec-cam-256xy", "xyzrotvec-cam-128xy", "xyzrotvec-cam-512xy256d" ], help="Encoder to use for the model")
     parser.add_argument("--ft_more_params", action="store_true", help="Fine-tune more parameters in the model")
-    parser.add_arugment("--double_eval", action="store_true", help="Evaluate on both real and synthetic datasets")
+    parser.add_argument("--double_eval", action="store_true", help="Evaluate on both real and synthetic datasets")
 
 
     return parser.parse_args()
