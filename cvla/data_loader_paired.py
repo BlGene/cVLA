@@ -1,19 +1,9 @@
-import glob
-import time
-import h5py
+import tqdm
 from pathlib import Path
-import torch
-from PIL import Image
-from collections import defaultdict
 import numpy as np
 import pickle
-from mani_skill.utils.structs import Pose
-from cvla.utils_traj_tokens import to_prefix_suffix, getActionEncDecFunction
-from cvla.utils_trajectory import DummyCamera
 from torch.utils.data import Dataset
-from cvla.data_augmentations import depth_to_color
 
-enc_func, dec_func = getActionEncDecFunction("xyzrotvec-cam-proj2")
 import matplotlib.pyplot as plt
 
 
@@ -37,84 +27,149 @@ class PairedDataset(Dataset):
                  load_presampled_pairs_path=None,
                  p_copy=0.0,
                  apply_copy_augs=False,
-                 sort_by_l2_distance=False,
+                 p_sort_by_l2_distance=0.0,
                  plot_statistics=False,
-                 mode="train"):
+                 sort_criteria="camera_position",   # camera or trajectory coords
+                 mode="train",
+                 presampled_path=None):
         self.raw_dataset = raw_dataset
         self.num_images_in_context = num_images_in_context
         self.image_order = image_order
         self.load_presampled_pairs_path = load_presampled_pairs_path
         self.p_copy = p_copy
         self.apply_copy_augs = apply_copy_augs
-        self.sort_by_l2_distance = sort_by_l2_distance
+        self.p_sort_by_l2_distance = p_sort_by_l2_distance
+        self.just_indices = False
         assert self.image_order in ["interleaved", "images_first"], \
             "image_order must be either 'interleaved' or 'images_first'"
         
-        # If a presampled pairs file exists, load it
-        if self.load_presampled_pairs_path is not None and self.load_presampled_pairs_path.exists():
-            print(f"Loading pre-sampled pairs from {load_presampled_pairs_path}")
-            
-            with open(load_presampled_pairs_path, "rb") as f:
-                self.task_lookup = pickle.load(f)
+        if presampled_path is not None and presampled_path.exists() and mode == "test":
+            print("Loaded presampled pairs from file.")
+            with open(presampled_path, "rb") as f:
+                self.presampled_pairs = pickle.load(f)
 
-            with open(load_presampled_pairs_path.parent / "task_images_camera_similarities.pkl", "rb") as f:
-                self.task_images_camera_similarities = pickle.load(f)
-        else:
-            # Setup: define a lookup table for task prefixes that stores image indices and camera positions.
-            # Use a lambda so that each new key gets a dictionary with the desired structure.
-            self.task_lookup = {}
-            self.task_images_camera_similarities = {}  # store for every task the pairwise distances matrix
-            
-            # Enable returning only the prefix to speed up processing
-            self.raw_dataset.return_only_prefix = True
-            for i in range(len(self.raw_dataset)):
-                entry = self.raw_dataset[i]
-                prefix = entry["prefix"].split("<")[0].strip()  # represents the task
-                if prefix not in self.task_lookup:
-                    self.task_lookup[prefix] = {"images": [], "camera_positions": []}
-                camera_position = compute_camera_position(entry["camera_extrinsic"])
-                self.task_lookup[prefix]["images"].append(i)
-                self.task_lookup[prefix]["camera_positions"].append(camera_position)
-            self.raw_dataset.return_only_prefix = False
-
-            # For every task, compute an images x images matrix with camera distances
-            for task, task_data in self.task_lookup.items():
-                camera_positions = np.array(task_data["camera_positions"])
-                # Compute pairwise Euclidean distances
-                dists = np.linalg.norm(camera_positions[:, None] - camera_positions[None, :], axis=-1)
-                self.task_images_camera_similarities[task] = dists
-
-            # Save the presampled pairs lookup if a path was provided and does not exist yet
-            if self.load_presampled_pairs_path is not None and not self.load_presampled_pairs_path.exists():
-                print(f"Saving pre-sampled pairs to {load_presampled_pairs_path}")
+            # Also load task look-up because we will need it for simulation
+            if self.load_presampled_pairs_path is not None and self.load_presampled_pairs_path.exists():
+                print(f"Loading pre-sampled pairs from {load_presampled_pairs_path}")
                 
-                with open(load_presampled_pairs_path, "wb") as f:
-                    pickle.dump(self.task_lookup, f)
+                with open(load_presampled_pairs_path, "rb") as f:
+                    self.task_lookup = pickle.load(f)
+        else:
+            self.presampled_pairs = None
 
-                with open(load_presampled_pairs_path.parent / "task_images_camera_similarities.pkl", "wb") as f:
-                    pickle.dump(self.task_images_camera_similarities, f)
+            # If a presampled pairs file exists, load it
+            if self.load_presampled_pairs_path is not None and self.load_presampled_pairs_path.exists():
+                print(f"Loading pre-sampled pairs from {load_presampled_pairs_path}")
+                
+                with open(load_presampled_pairs_path, "rb") as f:
+                    self.task_lookup = pickle.load(f)
+
+                camera_position_path = Path(str(load_presampled_pairs_path).replace(".pkl", "_camera_similarities.pkl"))
+                trajectory_shape_path = Path(str(load_presampled_pairs_path).replace(".pkl", "_trajectory_similarities.pkl"))
+
+                with camera_position_path.open(mode="rb") as f:
+                    self.task_images_camera_similarities = pickle.load(f)
+
+                with trajectory_shape_path.open(mode="rb") as f:
+                    self.task_images_trajectory_similarities = pickle.load(f)
+            else:
+                # Setup: define a lookup table for task prefixes that stores image indices and camera positions.
+                # Use a lambda so that each new key gets a dictionary with the desired structure.
+                self.task_lookup = {}
+                self.task_images_camera_similarities = {}  # store for every task the pairwise distances matrix
+                self.task_images_trajectory_similarities = {}  # store for every task the pairwise distances matrix
+                
+                # Enable returning only the prefix to speed up processing
+                self.raw_dataset.return_only_prefix = True
+                for i in tqdm.tqdm(range(len(self.raw_dataset))):
+                    entry = self.raw_dataset[i]
+                    prefix = entry["prefix"].split("<")[0].strip()  # represents the task
+                    if prefix not in self.task_lookup:
+                        self.task_lookup[prefix] = {"images": [], "camera_positions": [], "trajectory_coords": []}
+                    camera_position = compute_camera_position(entry["camera_extrinsic"])
+                    whd, _ = self.raw_dataset.action_encoder.decode_caption(entry["prefix"], entry["camera"])   # given in pixels
+                    self.task_lookup[prefix]["images"].append(i)
+                    self.task_lookup[prefix]["camera_positions"].append(camera_position)
+                    self.task_lookup[prefix]["trajectory_coords"].append(whd)
+                    
+                self.raw_dataset.return_only_prefix = False
+
+                if self.load_presampled_pairs_path is not None and not self.load_presampled_pairs_path.exists():
+                    print(f"Saving pre-sampled pairs to {load_presampled_pairs_path}")
+
+                    with open(load_presampled_pairs_path, "wb") as f:
+                        pickle.dump(self.task_lookup, f)
+
+                # For every task, compute an images x images matrix with camera distances
+                for task, task_data in self.task_lookup.items():
+                    camera_positions = np.array(task_data["camera_positions"])
+                    # Compute pairwise Euclidean distances
+                    dists = np.linalg.norm(camera_positions[:, None] - camera_positions[None, :], axis=-1)
+                    self.task_images_camera_similarities[task] = dists
+
+                    # Compute pairwise trajectory distances
+                    trajectory_coords = np.array(task_data["trajectory_coords"])
+                    # Compute pairwise Euclidean distances
+                    traj_dists = np.linalg.norm(trajectory_coords[:, None] - trajectory_coords[None, :], axis=-1)
+                    self.task_images_trajectory_similarities[task] = traj_dists
+
+                # Save the presampled pairs lookup if a path was provided and does not exist yet
+                if self.load_presampled_pairs_path is not None:
+                    camera_position_path = Path(str(load_presampled_pairs_path).replace(".pkl", "_camera_similarities.pkl"))
+                    trajectory_shape_path = Path(str(load_presampled_pairs_path).replace(".pkl", "_trajectory_similarities.pkl"))
+
+                    if not camera_position_path.exists():
+                        print(f"Saving camera position similarities to {camera_position_path}")
+                
+                        with open(camera_position_path, "wb") as f:
+                            pickle.dump(self.task_images_camera_similarities, f)
+
+                    if not trajectory_shape_path.exists():
+                        print(f"Saving trajectory shape similarities to {trajectory_shape_path}")
+
+                        with open(trajectory_shape_path, "wb") as f:
+                            pickle.dump(self.task_images_trajectory_similarities, f)
         
-        # Remove tasks with only one image
-        self.task_lookup = {k: v for k, v in self.task_lookup.items() if len(v["images"]) > 1}
+            # Remove tasks with only one image
+            self.task_lookup = {k: v for k, v in self.task_lookup.items() if len(v["images"]) > 1}
 
-        # Precompute and store additional properties to re-use later
-        self.saved_indices = {task: data["images"] for task, data in self.task_lookup.items()}
-        self.data_properties = {task: data["camera_positions"] for task, data in self.task_lookup.items()}
-        self.similarity_metric = self.task_images_camera_similarities
+            # Precompute and store additional properties to re-use later
+            self.saved_indices = {task: data["images"] for task, data in self.task_lookup.items()}
+            self.data_properties = {task: data["camera_positions"] for task, data in self.task_lookup.items()}
+            if sort_criteria == "camera_position":
+                self.similarity_metric = self.task_images_camera_similarities
+            else:
+                self.similarity_metric = self.task_images_trajectory_similarities
         
         # Total number of samples (here defined as the sum of images over tasks)
         if mode == "train":
             self.paired_len = sum([len(v["images"]) for v in self.task_lookup.values()])
         else:
-            self.paired_len = 10
+            if self.presampled_pairs is not None:
+                self.paired_len = len(self.presampled_pairs)
+            else:
+                print("Creating presampled pairs for validation/test set.")
+                # presample the pairs
+                self.paired_len = 1000
+                self.just_indices = True
+                tmp_indices = []
+                for i in range(1000):
+                    tmp_indices.append(self[i])
+
+                self.presampled_pairs = tmp_indices
+                self.just_indices = False
+                # Save the presampled pairs
+                if presampled_path is not None:
+                    with open(presampled_path, "wb") as f:
+                        pickle.dump(self.presampled_pairs, f)
         
         # Print and plot statistics about the dataset
         print("Statistics about the paired dataset:")
-        print(f"Number of tasks with >1 image: {len(self.task_lookup)}")
+        #print(f"Number of tasks with >1 image: {len(self.task_lookup)}")
         print(f"Total number of images (across tasks): {self.paired_len}")
         if plot_statistics:
             self.plot_statistics()
-    
+
     def plot_statistics(self):
         # Plot histogram of images per task
         task_image_counts = [len(data["images"]) for data in self.task_lookup.values()]
@@ -155,21 +210,34 @@ class PairedDataset(Dataset):
         if idx < 0 or idx >= len(self):
             raise IndexError("Index out of range")
         
-        # Uniformly sample a task (TODO: consider weighted sampling if needed)
-        task = np.random.choice(list(self.task_lookup.keys()))
-        
-        if np.random.rand() < self.p_copy:
-            # Copy sampling: context and query are exactly the same image.
-            chosen_idx = np.random.choice(self.task_lookup[task]["images"], 1, replace=False)[0]
-            image, entry = self.raw_dataset[chosen_idx]
-            images = [image] * (self.num_images_in_context + 1)
-            entries = [entry] * (self.num_images_in_context + 1)
-            # Optionally, apply augmentation on the copies
-            if self.apply_copy_augs:
-                # TODO: Add your augmentation (cropping/resizing) to the copied images here.
-                pass
+        if self.presampled_pairs is not None:
+            sequence_to_sample = self.presampled_pairs[idx]
+            images = []
+            entries = []
+            for i in sequence_to_sample:
+                image, entry = self.raw_dataset[i]
+                images.append(image)
+                entries.append(entry)
+
         else:
-            if self.sort_by_l2_distance:
+        
+            # Uniformly sample a task (TODO: consider weighted sampling if needed)
+            task = np.random.choice(list(self.task_lookup.keys()))
+            
+            if np.random.rand() < self.p_copy:
+                # Copy sampling: context and query are exactly the same image.
+                chosen_idx = np.random.choice(self.task_lookup[task]["images"], 1, replace=False)[0]
+                if self.just_indices:
+                    return [chosen_idx] * (self.num_images_in_context + 1)
+                image, entry = self.raw_dataset.getitem_func(chosen_idx)   # self.raw_dataset[chosen_idx]
+                images = [image] * (self.num_images_in_context + 1)
+                entries = [entry] * (self.num_images_in_context + 1)
+                # Optionally, apply augmentation on the copies
+                if self.apply_copy_augs:
+                    augmented_copy = self.raw_dataset.getitem_func(chosen_idx, force_augs=True)
+                    images[-1] = augmented_copy[0]
+                    
+            elif np.random.rand() < self.p_sort_by_l2_distance:
                 # Sample one query image, then choose context images based on similarity (L2 distance)
                 task_img_indices = self.task_lookup[task]["images"]
                 query_pos = np.random.choice(len(task_img_indices), 1, replace=False)[0]
@@ -178,12 +246,10 @@ class PairedDataset(Dataset):
                 # Sort indices; skip the query itself (first index after sorting should be itself)
                 sorted_indices = np.argsort(distances)
                 context_indices = sorted_indices[1:self.num_images_in_context + 1]
-                # print camera positions for query and context images
-                print("Query camera position:", self.data_properties[task][query_pos])
-                print("Context camera positions:")
-                for i in context_indices:
-                    print(self.data_properties[task][i])
                 
+                if self.just_indices:
+                    return [task_img_indices[i] for i in context_indices] + [task_img_indices[query_pos]]
+
                 images, entries = [], []
                 for i in context_indices:
                     img_idx = task_img_indices[i]
@@ -196,11 +262,14 @@ class PairedDataset(Dataset):
                 query_image, query_entry = self.raw_dataset[query_img_idx]
                 images.append(query_image)
                 entries.append(query_entry)
+            
             else:
                 # Uniformly sample random images from the task (without sorting by pose)
                 task_img_indices = self.task_lookup[task]["images"]
                 # Sample without replacement the required number of images (context + query)
                 chosen_indices = np.random.choice(task_img_indices, self.num_images_in_context + 1, replace=False)
+                if self.just_indices:
+                    return chosen_indices.tolist()
                 images, entries = [], []
                 for idx in chosen_indices:
                     image, entry = self.raw_dataset[idx]

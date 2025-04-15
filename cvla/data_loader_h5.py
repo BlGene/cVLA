@@ -20,7 +20,7 @@ from cvla.data_augmentations import depth_to_color
 class H5Dataset(Dataset):
     def __init__(self, h5_file_or_dir, return_depth=False, augment_depth=None, depth_to_color=True,
                  augment_rgbds=None, augment_rgb=None, augment_text=None, return_only_prefix=False,
-                 action_encoder="xyzrotvec-cam-1024xy", limit_samples=None):
+                 action_encoder="xyzrotvec-cam-1024xy", limit_samples=None, augment_rgb_forced=None):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -49,6 +49,7 @@ class H5Dataset(Dataset):
         self.augment_text = augment_text
         self.augment_depth = augment_depth
         self.depth_to_color = depth_to_color
+        self.augment_rgb_forced = augment_rgb_forced        # only for copy-pasting when needed
 
         self.return_only_prefix = return_only_prefix        # used only for paired dataset for setup
 
@@ -73,7 +74,7 @@ class H5Dataset(Dataset):
         return self.getitem_func(random_idx)
     
         
-    def getitem_func(self, idx: int):
+    def getitem_func(self, idx: int, force_augs=False):
         action_text = None
         for x in self.h5_file[f'traj_{idx}/obs/extra'].keys():
             if x.startswith("action_text_"):
@@ -107,11 +108,14 @@ class H5Dataset(Dataset):
 
         depth = None
         seg = None
-        if self.augment_rgbds is not None:
+        if self.augment_rgbds is not None or force_augs:
             depth = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/depth'][0][:,:,0]
             depth = np.clip(depth, 0, 1023)
             seg = self.h5_file[f'traj_{idx}/obs/sensor_data/render_camera/segmentation'][0]
-            image = self.augment_rgbds(image, depth, seg)
+            if force_augs:
+                image = self.augment_rgb_forced(image, depth, seg)
+            else:
+                image = self.augment_rgbds(image, depth, seg)
 
         if self.augment_rgb is not None:
             image = self.augment_rgb(image)
@@ -133,69 +137,3 @@ class H5Dataset(Dataset):
             return [depth, image], entry
         
         return image, entry
-
-
-
-class PairedH5Dataset(Dataset):
-    def __init__(self, h5_dataset, num_images_in_context=1, image_order="interleaved", load_presampled_pairs_path=None):
-        self.h5_dataset = h5_dataset
-        self.num_images_in_context = num_images_in_context
-        self.image_order = image_order
-        self.load_presampled_pairs_path = load_presampled_pairs_path
-        assert self.image_order in ["interleaved", "images_first"]  # interleaved is image, text, image..., images_first is image, image, text,...
-
-        if self.load_presampled_pairs_path is not None and load_presampled_pairs_path.exists():
-            print(f"Loading pre-sampled pairs from {load_presampled_pairs_path}")
-            # load presampled pickle and save it to self.task_lookup
-            with open(load_presampled_pairs_path, "rb") as f:
-                self.task_lookup = pickle.load(f)
-        else:
-
-            # setup - define a lookup table for image idx and tasks they are performing
-            self.h5_dataset.return_only_prefix = True
-            self.task_lookup = defaultdict(list)
-            for i in range(len(self.h5_dataset)):
-                entry = self.h5_dataset[i]
-                prefix = entry["prefix"].split("<")[0].strip()
-                self.task_lookup[prefix].append(i)
-
-            self.h5_dataset.return_only_prefix = False
-
-            # if load_presampled_pairs_path is not None and does not exist, save the pre-sampled pairs
-            if self.load_presampled_pairs_path is not None and not load_presampled_pairs_path.exists():
-                print(f"Saving pre-sampled pairs to {load_presampled_pairs_path}")
-                with open(load_presampled_pairs_path, "wb") as f:
-                    pickle.dump(self.task_lookup, f)
-
-        # if there are tasks with only one image, we need to remove them
-        self.task_lookup = {k:v for k,v in self.task_lookup.items() if len(v) > 1}
-
-        self.paired_len = sum([len(v) for v in self.task_lookup.values()])  # number of possible pairs
-
-        # print statistics about the dataset
-        print("Statistics about the paired dataset:")
-        print(f"Number of tasks with more than one image: {len(self.task_lookup)}, total number of pairs: {self.paired_len}")
-        # print(f"Tasks and number of images: {[(k, len(v)) for k,v in self.task_lookup.items()]}")
-
-    def __len__(self):
-        return self.paired_len
-            
-    def __getitem__(self, idx: int):
-        if idx < 0 or idx >= len(self):
-            raise IndexError("Index out of range")
-        
-        # sample a task                 # TODO: Change to weighted sampling, now it is only uniform
-        task = np.random.choice(list(self.task_lookup.keys()))
-
-        # sample random images to be put into context
-        context_idx = np.random.choice(self.task_lookup[task], self.num_images_in_context + 1, replace=False)
-        images, entries = [], []
-        for i in context_idx:
-            image, entry = self.h5_dataset[i]
-            images.append(image)
-            entries.append(entry)
-        
-        return images, entries
-
-
-
