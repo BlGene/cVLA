@@ -367,16 +367,28 @@ def get_datasets(args, dataset_location, valid_dataset_location):
     
     if "mix30obj" in args.dataset_version:
         from torch.utils.data import ConcatDataset
-        if args.dataset_version == "mix30obj-8":
-            dataset_location = "/tmp/cvla-clevr-8"
-            dataset_location1 = "/tmp/cvla-clevr-8"
-            dataset_location2 = "/tmp/cvla-obja-8"
-        elif args.dataset_version == "mix30obj-9":
-            dataset_location = "/tmp/cvla-clevr-9"
-            dataset_location1 = "/tmp/cvla-clevr-9"
-            dataset_location2 = "/tmp/cvla-obja-9"
+        if "mix30obj-8" in args.dataset_version:
+            cvla_dataset = "cvla-obja-8"
+            clevr_dataset = "cvla-clevr-8"
+        elif "mix30obj-camF-sceneF-9" in args.dataset_version:
+            clevr_dataset = "cvla-clevr-camF-sceneF-9"
+            cvla_dataset = "cvla-obja-camF-sceneF-9"
+        elif "mix30obj-camRF-sceneF-9" in args.dataset_version:
+            clevr_dataset = "cvla-clevr-camRF-sceneF-9"
+            cvla_dataset = "cvla-obja-camRF-sceneF-9"
+        elif "mix30obj-camRF-sceneR-9" in args.dataset_version:
+            clevr_dataset = "cvla-clevr-camRF-sceneR-9"
+            cvla_dataset = "cvla-obja-camRF-sceneR-9"
+        elif "mix30obj-camRS-sceneF-9" in args.dataset_version:
+            clevr_dataset = "cvla-clevr-camRS-sceneF-9"
+            cvla_dataset = "cvla-obja-camRS-sceneF-9"
         else:
             raise ValueError(f"Unknown dataset version: {args.dataset_version}")
+        
+        dataset_location = f"/tmp/{clevr_dataset}"
+        dataset_location1 = f"/tmp/{clevr_dataset}"
+        dataset_location2 = f"/tmp/{cvla_dataset}"
+
         dataset1 = H5Dataset(dataset_location1, return_depth=return_depth, action_encoder=action_encoder, limit_samples=100_000,
                              augment_rgbds=augment_rgbds, augment_rgb=augment_rgb, augment_text=augment_text, augment_depth=augment_depth)
         dataset2 = H5Dataset(dataset_location2, return_depth=return_depth, action_encoder=action_encoder, limit_samples=50_000,
@@ -384,13 +396,14 @@ def get_datasets(args, dataset_location, valid_dataset_location):
         raw_dataset = ConcatDataset([dataset1, dataset2])
         assert dataset1.action_encoder.NAME == dataset2.action_encoder.NAME, f"Action encoders are different: {dataset1.action_encoder.NAME} vs {dataset2.action_encoder.NAME}"
         raw_dataset.action_encoder = dataset1.action_encoder
+        print("Concatenated the datasets of lengths:", len(dataset1), len(dataset2), "total:", len(raw_dataset))
     else:
         raw_dataset = H5Dataset(dataset_location, return_depth=return_depth, action_encoder=action_encoder,
                                 augment_rgbds=augment_rgbds, augment_rgb=augment_rgb, augment_text=augment_text, augment_depth=augment_depth)
     
     clean_text = CleanText(truncate_len=75)
     if args.conditioning == "text":
-        run_name = f"_text_lr{args.lr}" + args.extra_run_name
+        run_name = f"{args.dataset_version}_text_lr{args.lr}" + args.extra_run_name
         train_dataset = raw_dataset
         
         eval_sim_dataset = H5Dataset(valid_dataset_location, action_encoder=action_encoder, return_depth=return_depth, limit_samples=200,
@@ -400,7 +413,7 @@ def get_datasets(args, dataset_location, valid_dataset_location):
         eval_dataset_location  = Path("/data/lmbraid19/argusm/datasets/cvla-droid-block-simple-v4")
         train_ratio = 0.0 if "droid-block" in str(eval_dataset_location) else 0.8
         eval_real_dataset = JSONLDataset(jsonl_file_path=eval_dataset_location, action_encoder=action_encoder,
-                                         augment_text=clean_text, return_depth=False, split="valid", train_ratio=train_ratio)
+                                         augment_text=clean_text, return_depth=return_depth, split="valid", train_ratio=train_ratio)
 
         eval_real_dummy_camera = eval_real_dataset[0][1]["camera"]
         eval_real_action_encoder = eval_real_dataset.action_encoder
@@ -411,7 +424,7 @@ def get_datasets(args, dataset_location, valid_dataset_location):
 
         run_name = f"_img_{num_images_in_context}_pr_{image_order}_enc_{action_encoder}"
         eval_run_name = run_name
-        run_name = f"{dataset_location.name}_{run_name}"
+        run_name = f"{args.dataset_version}_{run_name}"
         load_presampled_pairs_path = Path("/data/lmbraid21/bratulic/max_pali/datasets") / f"{run_name}_new.pkl"
         run_name += f"maxTokens{args.max_tokens}_lr{args.lr}" + args.extra_run_name  
 
@@ -626,10 +639,12 @@ def main():
     import traceback
     try:
         trainer.train(resume_from_checkpoint=args.checkpoint)
-    except Exception as e:  # Catch all exceptions, including AssertionError
-        print(f"Encountered error {e.__class__.__name__}")
-        print(e)
-        traceback.print_exc()  # Prints the full traceback
+    except: #Exception as e:  # Catch all exceptions, including AssertionError, but not keyboard ??
+        # 
+        #print(f"Encountered error {e.__class__.__name__}")
+        #print(e)
+        #traceback.print_exc()  # Prints the full traceback
+        print("Training failed. Saving model and exiting...")
     print("Done training.")
 
     # TRANSFER THE MODEL TO FINAL LOCATION

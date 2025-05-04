@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 from transformers import PaliGemmaProcessor, PaliGemmaForConditionalGeneration
 from cvla.utils_traj_tokens import getActionEncInstance
-
+from cvla.data_augmentations import depth_to_color
 
 def load_config_from_txt(filepath):
     def convert_value(value):
@@ -150,7 +150,6 @@ class cVLA_wrapped:
                             images_flat.append(image_tuples[-1])
                 else:
                     images_flat = [image for images_list in images for image in images_list]
-
                 inputs = processor(
                     text=prefixes,
                     images=images_flat,
@@ -192,19 +191,57 @@ class cVLA_wrapped:
         self.model = model
         self.collate_fn = collate_fn
         
+    def predict_from_paired(self, images, entry, depth):
+        assert self.conditioning == "trajectory"
+        max_new_tokens = 13
+        batch = [(images, entry, depth)]
+        inputs = self.collate_fn(batch)
+
+        prefix_length = inputs["input_ids"].shape[-1]
+        try:
+            with torch.inference_mode():
+                generation = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, use_cache=False)
+                decoded = [self.processor.decode(x, skip_special_tokens=True) for x in generation[:, prefix_length:]]
+        except:
+            print("Failed to generate for prefix:", entry)
+            return [""]
+        
+        return decoded[0]
+
     def predict(self, images, prefix, robot_state=None):
         #if robot_state is None:
         #    robot_state = "<loc0137><loc0794><loc0057><seg058><seg034><seg017>"
         #assert robot_state is not None
         #prefix = action_text + " " + robot_state
-
+        max_new_tokens = 13
         if self.conditioning == "trajectory":
             batch = self.get_trajectory_inputs(images, prefix)
-            max_new_tokens = 13
+            if self.return_depth:
+                if batch is not None:
+                    images, entries, depths = batch[0]
+                    new_depths = []
+                    for depth in depths:
+                        depth = depth.detach().cpu().numpy().squeeze()
+                        depth = np.clip(depth, 0, 1023)
+                        depth = depth_to_color(depth)
+                        depth = np.clip((depth * 255).round(), 0, 255).astype(np.uint8)
+                        new_depths.append(depth)
+                    batch = [(images, entries, new_depths)]
+            
         else:
             entry_dict = dict(prefix=prefix)
+
+            depth, image = images
+            if self.return_depth:
+                depth = depth.detach().cpu().numpy().squeeze()
+                depth = np.clip(depth, 0, 1023)  # depth im [mm]
+                depth = depth_to_color(depth)
+                depth = np.clip((depth * 255).round(), 0, 255).astype(np.uint8)
+                images = (depth, image)
+            else:
+                images = image
+            #print(image.shape, depth.shape)
             batch = [(images, entry_dict)]  # batch size of 1
-            max_new_tokens = 12
 
         if batch is None:   # Automatic failure if no demonstration image is found
             print("No demonstration image found for task:", prefix)
@@ -213,9 +250,14 @@ class cVLA_wrapped:
         inputs = self.collate_fn(batch)
         
         prefix_length = inputs["input_ids"].shape[-1]    
-        with torch.inference_mode():
-            generation = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, use_cache=False)
-            decoded = [self.processor.decode(x, skip_special_tokens=True) for x in generation[:, prefix_length:]]
+        try:
+            with torch.inference_mode():
+                generation = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, use_cache=False)
+                decoded = [self.processor.decode(x, skip_special_tokens=True) for x in generation[:, prefix_length:]]
+
+        except:
+            print("Failed to generate for prefix:", prefix)
+            return [""]
 
         return decoded
     
@@ -229,9 +271,15 @@ class cVLA_wrapped:
         traj = self.enc_model.decode_trajectory(pred_text[0], camera=camera)
         return traj
 
-    def get_trajectory_inputs(self, query_image, prefix):
+    def get_trajectory_inputs(self, query_images, prefix):
+        if isinstance(query_images, list) or isinstance(query_images, tuple):
+            query_depth = query_images[0]
+            query_image = query_images[1]
+        else:
+            query_depth = None
+            query_image = query_images
         task = prefix.split("<")[0].strip()
-        demonstration_image, demonstration_entry = self.get_demonstration_image(task)
+        demonstration_image, demonstration_entry, demonstration_depth = self.get_demonstration_image(task)
         
         if demonstration_image is None: # No such task, can't sample demonstration
             return None
@@ -240,8 +288,9 @@ class cVLA_wrapped:
 
         images = [demonstration_image, query_image]
         entries = [demonstration_entry, query_entry]
+        depths = [demonstration_depth, query_depth]
 
-        batch = [(images, entries)]
+        batch = [(images, entries, depths)]
 
         return batch
 
@@ -250,10 +299,16 @@ class cVLA_wrapped:
             available_images = self.task_lookup[task]["images"]
             random_demonstration = np.random.choice(available_images)
             image, entry = self.conditioning_dataset.raw_dataset[random_demonstration]
+            if isinstance(image, list):
+                depth = image[0]
+                image = image[1]
+            else:
+                depth = None
         else:
             image = None
             entry = None
-        return image, entry
+            depth = None
+        return image, entry, depth
 
 
 

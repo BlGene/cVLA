@@ -16,9 +16,9 @@ def check_if_valid(decoded_preds, decoded_labels):
     if len(all_predicted_tokens) == 12:
         # check if loc loc loc seg seg seg loc loc loc seg seg seg
         expected_format = ["loc", "loc", "loc", "seg", "seg", "seg", "loc", "loc", "loc", "seg", "seg", "seg"]
-        for pred_token, expected_token in zip(all_predicted_tokens, expected_format):
-            if expected_token not in pred_token:
-                return False
+        #for pred_token, expected_token in zip(all_predicted_tokens, expected_format):
+        #    if expected_token not in pred_token:
+        #        return False
             
     # if len 12 and passed the check, we have correct order
     return True

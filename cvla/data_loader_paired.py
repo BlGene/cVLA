@@ -86,7 +86,11 @@ class PairedDataset(Dataset):
                 self.raw_dataset.return_only_prefix = True
                 for i in tqdm.tqdm(range(len(self.raw_dataset))):
                     entry = self.raw_dataset[i]
-                    prefix = entry["prefix"].split("<")[0].strip()  # represents the task
+                    if isinstance(entry, dict):
+                        entry = entry
+                    else:
+                        entry = entry[1]
+                    prefix = entry["prefix"].split("<")[0].strip()
                     if prefix not in self.task_lookup:
                         self.task_lookup[prefix] = {"images": [], "camera_positions": [], "trajectory_coords": []}
                     camera_position = compute_camera_position(entry["camera"].extrinsic_matrix)
@@ -186,7 +190,10 @@ class PairedDataset(Dataset):
 
         # Print and plot statistics about the dataset
         print("Statistics about the paired dataset:")
-        print(f"Number of tasks with >1 image: {len(self.task_lookup)}")
+        try:
+            print(f"Number of tasks with >1 image: {len(self.task_lookup)}")
+        except:
+            print("No task look up table found.")
         print(f"Total number of images (across tasks): {self.paired_len}")
         if plot_statistics:
             self.plot_statistics()

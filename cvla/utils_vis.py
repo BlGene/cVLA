@@ -94,7 +94,7 @@ def draw_probas_edge(image, pred_scores):
 
     return image
 
-def render_example(image, label: str=None, prediction: str=None, camera=None, enc=None, enc_pred=None, text: str=None):
+def render_example(image, label: str=None, prediction: str=None, camera=None, enc=None, enc_pred=None, text: str=None, i=0, extra_text: str=None):
     """
     Render an example image to HTML, e.g., for use in notebooks.
     Arguments:
@@ -153,25 +153,30 @@ def render_example(image, label: str=None, prediction: str=None, camera=None, en
         pass
     if curve_25d is not None:
         curve_2d  = curve_25d[:, :2]
-        ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green')
+        ax.plot(curve_2d[:, 0], curve_2d[:, 1],'.-', color='green', linewidth=2)
         if draw_label_coords:
             draw_coordinate_frame(label, camera, enc_label, ax)            
     
     html_text = ""
     if text:
-       html_text = f'{html.escape("text: "+text)}'
+        html_text = f'{html.escape("text: "+text)}'
+    if extra_text:
+        html_text += f'</br></br>{html.escape("info: "+extra_text)}'
     html_text += f'</br></br>{html.escape("label: "+str(label))}'
 
     if prediction:
         html_text += f'</br></br>{html.escape("pred: "+prediction)}'
         try:
             curve_2d_gt, quat_c = enc_pred.decode_caption(prediction, camera)
-            ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='lime')
+            ax.plot(curve_2d_gt[:, 0], curve_2d_gt[:, 1],'.-', color='magenta', linewidth=2)
             ax.scatter(curve_2d_gt[0, 0], curve_2d_gt[0, 1], color='red')
             if draw_pred_coords:
                 draw_coordinate_frame(prediction, camera, enc_pred, ax)
         except (ValueError, IndexError):
             pass
+
+    # save fig for visualization 
+    # fig.savefig(f"visuals/tmp_{i}.jpg", format='jpeg',bbox_inches='tight', dpi=300)
 
     with io.BytesIO() as buffer:
         fig.savefig(buffer, format='jpeg',bbox_inches='tight', dpi=dpi)

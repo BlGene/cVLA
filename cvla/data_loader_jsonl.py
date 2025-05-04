@@ -130,8 +130,8 @@ class JSONLDataset(Dataset):
             depth_png = Image.open(depth_path)
             depth_png = np.array(depth_png)
             depth_png[depth_png==3000] = 0
-            #scaling_png_to_mm = 3 / 65535 * 1000  # for real exports v1 and v2
-            scaling_png_to_mm = 1
+            scaling_png_to_mm = 3 / 65535 * 1000  # for real exports v1 and v2
+            #scaling_png_to_mm = 1
             depth = depth_png * scaling_png_to_mm
             if self.augment_depth is not None:
                 depth, suffix = self.augment_depth(depth, entry["suffix"])
