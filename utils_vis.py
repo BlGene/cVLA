@@ -126,6 +126,9 @@ def render_example(image, label, prediction=None, text=None, camera=None, dec=No
     
         from IPython.display import display, HTML
         display(HTML(html_imgs))
+    
+    Arguments:
+        
     """
     dec_label = dec
     if dec_label is None:

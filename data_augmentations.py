@@ -402,6 +402,73 @@ class CropMiddle:
 
         return crop, suffix_new
 
+class CropCenter:
+    def __init__(self, crop_size: int, valid: bool):
+        """
+        Arguments:
+            image: PIL.Image (h w c)
+            suffix (12) = obj_start (h w d rv0 rv1 rv2), obj_end (h w d rv0 rv1 rv2)
+
+            crop_size: int, total width of crop
+            object_size: int, size of start and end objects in pixels
+            valid: bool, make valid crop
+            
+        Crop at center between start and end objects.
+        Shift coor center to crop center and set crop size as maximum coordinate.
+        """
+
+        self.crop_size = crop_size
+        self.valid = valid
+        
+    def __call__(self, image: Image, suffix: str):
+        """
+        Arguments: see __init__()
+        """
+
+        crop_size = self.crop_size
+        image_width, image_height = image.size[:2]
+
+        # convert string tokens to int
+        # depth in cm, x and y in [0, 1023]
+        loc_strings = [int(x) for x in re.findall(r"<(?:loc|seg)(-?\d+)>", suffix)]
+        loc_strings = np.array(loc_strings)
+        loc_strings = loc_strings.reshape(-1, 6) # each row contains (h w d r0 r1 r2)
+
+        # convert from maniskill (1024, 1024) to (image_height, image_width)
+        loc_h = (loc_strings[:, 0]/(1024-1)*image_height).round().astype(int) # (obj_start obj_end)
+        loc_w = (loc_strings[:, 1]/(1024-1)*image_width).round().astype(int)
+
+        # Image center crop
+        center_h = image_height // 2
+        center_w = image_width // 2
+
+        # Copied from CropMiddle
+        crop_h = crop_size
+        crop_w = crop_size
+        top = center_h - crop_h // 2
+        left = center_w - crop_w // 2
+
+        # valid crop
+        if self.valid:
+            top = max(0, top)
+            left = max(0, left)
+            crop_h = min(image_height - top, crop_h)
+            crop_w = min(image_width - left, crop_w)
+        
+        box = (top, left, crop_h, crop_w) # yxhw
+        crop = v2.functional.crop(image, *box)
+
+        # add delta to y x, go from (image_height, image_width) to maniskill (1024, 1024)
+        loc_strings[:, 0] = ((loc_h - top)/crop_h*(1024-1)).round().astype(int)
+        loc_strings[:, 1] = ((loc_w - left)/crop_w*(1024-1)).round().astype(int)
+
+        suffix_new = ""
+        for x in loc_strings:
+            suffix_new += "<loc{a[0]:04d}><loc{a[1]:04d}><loc{a[2]:04d}><seg{a[3]:03d}><seg{a[4]:03d}><seg{a[5]:03d}>".format(a=x)
+
+        return crop, suffix_new
+
+
 def test_obj_start_crop():
     """
     Test:

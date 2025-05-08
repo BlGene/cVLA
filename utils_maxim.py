@@ -98,6 +98,11 @@ def save_model_output(generation, filename, save_beams=False):
     """
     tokens vector = language tokens, 1024 x loc, 128 x seg, 64 x special
     """
+    #if type(generation) is list:
+    #    # concatenate generations into one numpy array like with beam search
+    #    scores = torch.stack([gen.scores for gen in generation]).cpu().numpy() #  (n_beams, prediction_step, 1, n_tokens)
+    #    scores = np.transpose(scores, (2, 1, 0, 3))[0]
+    #else:
     scores = torch.stack(generation.scores).cpu().numpy() # (prediction_steps, 1, n_tokens)
     _, _, n_tokens = scores.shape
     loc_first = n_tokens - 1024 - 128 - 64
