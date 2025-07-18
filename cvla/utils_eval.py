@@ -1,7 +1,7 @@
-import numpy as np
-import torch
 import re
 
+import torch
+import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
@@ -59,46 +59,51 @@ class Evaluator:
             decoded_labels: labels decoded from the llm (so as strings)
         """
         self.total_counter += 1 
-        
-        
-        if not check_if_valid(decoded_preds, decoded_labels):   # either not enough tokens or wrong order
-            return
-        
-        self.valid_counter += 1
 
         if camera is None:
             camera = self.camera_fixed
-            
+                
         if robot_pose is None:
             robot_pose = self.robot_pose_fixed
 
         for mode in ("cam", "cart"):    
             if mode == "cam":
-                dec_func_preds, dec_func_lab = self.decode_caption_preds, self.decode_caption_labels
+                dec_func_preds, dec_func_lable = self.decode_caption_preds, self.decode_caption_labels
             elif mode == "cart":
-                dec_func_preds, dec_func_lab = self.decode_trajectory_preds, self.decode_trajectory_labels
+                dec_func_preds, dec_func_lable = self.decode_trajectory_preds, self.decode_trajectory_labels
 
             try:
-                pos_data, orn_data = dec_func_lab(decoded_labels, camera=camera, robot_pose=robot_pose)
+                pos_label, orn_label = dec_func_lable(decoded_labels, camera=camera, robot_pose=robot_pose)
                 pos_pred, orn_pred = dec_func_preds(decoded_preds, camera=camera, robot_pose=robot_pose)
             except ValueError:
-                print("skipping")
+                print(f"skipping sample {decoded_preds}")
                 continue
-
+            
+            # fix shape missmatch here (caption and trajectory decoder have different shapes)
             if mode == "cart":
-                pos_data, orn_data = pos_data[0], orn_data[0]
+                assert pos_label.ndim == 3 and pos_label.shape[0] == 1, f"pos_data wrong size is {pos_label.shape}"
+                pos_label, orn_label = pos_label[0], orn_label[0]
                 pos_pred, orn_pred = pos_pred[0], orn_pred[0]
-                
-            self.all_data[mode]["data"]["pos"].append(pos_data.numpy())
+            elif mode == "cam":
+                assert pos_label.ndim == 2
+
+            if pos_label.shape != pos_pred.shape or orn_label.shape != orn_pred.shape:
+                print(f"skipping sample (shape) {decoded_preds}")
+                continue
+            
+            self.all_data[mode]["data"]["pos"].append(pos_label.numpy())
             self.all_data[mode]["pred"]["pos"].append(pos_pred.numpy())
-            self.all_data[mode]["data"]["orn"].append(R.from_quat(orn_data.numpy(), scalar_first=True))
+            self.all_data[mode]["data"]["orn"].append(R.from_quat(orn_label.numpy(), scalar_first=True))
             self.all_data[mode]["pred"]["orn"].append(R.from_quat(orn_pred.numpy(), scalar_first=True))
     
     def report_stats(self):
-        # if there was no data, return max values
-        if self.valid_counter == 0:
-            return_stats_dict = dict()
-            for mode in ("cam", "cart"):
+        return_stats_dict = dict()
+
+        for mode in ("cam", "cart"):
+            self.valid_counter = len(self.all_data[mode]["pred"]["pos"])
+
+            # if there was no data, return max values
+            if self.valid_counter == 0:
                 for i, action_label in enumerate(self.action_labels):
                     return_stats_dict[f"{mode}_{action_label}_l2"] = self.max_l2
                     return_stats_dict[f"{mode}_{action_label}_l1"] = self.max_l1
@@ -106,17 +111,13 @@ class Evaluator:
                 return_stats_dict[f"{mode}_l2"] = self.max_l2
                 return_stats_dict[f"{mode}_l1_depth"] = self.max_l1
                 return_stats_dict[f"{mode}_l1_depth_obj"] = self.max_l1
-            return_stats_dict["valid_counter"] = 0
-            return return_stats_dict
-        
-        # elif valid_counter > 0
-        for mode in self.all_data:
+                continue
+
+            # elif valid_counter > 0
             for split in self.all_data[mode]:
                 self.all_data[mode][split]["pos"] = np.array(self.all_data[mode][split]["pos"])
 
-        valid_diffs = dict()
-        return_stats_dict = dict()
-        for mode in ("cam", "cart"):
+            valid_diffs = dict()
             valid_diff = self.all_data[mode]["data"]["pos"] - self.all_data[mode]["pred"]["pos"]
             if mode == "cart":
                 valid_diff = valid_diff * 100
@@ -124,24 +125,22 @@ class Evaluator:
                 valid_diff[:, :, 2] = valid_diff[:, :, 2] * 100
             valid_orn_diffs = [(R.inv(r1) * r2) for r1, r2 in zip(self.all_data[mode]["data"]["orn"], self.all_data[mode]["pred"]["orn"])]
             valid_orn_diffs_deg = np.array([r1.magnitude() for r1 in valid_orn_diffs]) * 180 / np.pi
-            valid_orn_diffs_r = [r1.as_rotvec() for r1 in valid_orn_diffs]
             valid_diffs[mode] = np.concatenate((valid_diff, valid_orn_diffs_deg[:, :, np.newaxis]), axis=-1)
 
-            for i, action_label in enumerate(self.action_labels):
-                return_stats_dict[f"{mode}_{action_label}_l2"] = np.linalg.norm(valid_diffs[mode][:, :, i])
-                return_stats_dict[f"{mode}_{action_label}_l1"] = np.mean(np.abs(valid_diffs[mode][:, :, i]))
             l1 = np.mean(np.abs(valid_diffs[mode]))
             l2 = np.linalg.norm(valid_diffs[mode])
-            l1_depth = np.mean(np.abs(valid_diffs[mode][:, :, 2]))
-            l1_depth_obj = np.mean(np.abs(valid_diffs[mode][:, 0, 2]))
             return_stats_dict[f"{mode}_l1"] = l1
             return_stats_dict[f"{mode}_l2"] = l2
-            #return_stats_dict[f"{mode}_depth_l1"] = l1_depth
+            
+            for i, action_label in enumerate(self.action_labels):
+                return_stats_dict[f"{mode}_{action_label}_l1"] = np.mean(np.abs(valid_diffs[mode][:, :, i]))
+                return_stats_dict[f"{mode}_{action_label}_l2"] = np.linalg.norm(valid_diffs[mode][:, :, i])
+            l1_depth_obj = np.mean(np.abs(valid_diffs[mode][:, 0, 2]))
             return_stats_dict[f"{mode}_d_obj_l1"] = l1_depth_obj
+            self.valid_diffs = valid_diffs  # why are we keeping this again?
 
-        return_stats_dict["valid_counter"] = self.valid_counter / self.total_counter
-    
-        self.valid_diffs = valid_diffs
+        return_stats_dict["valid_frac"] = self.valid_counter / self.total_counter
+        return_stats_dict["num_samples"] = self.total_counter
         return return_stats_dict
     
     def reset(self):

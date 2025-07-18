@@ -416,7 +416,7 @@ class TrajectoryEncoder_xyzrotvec_512xy256d(TrajectoryEncoder_xyzrotvec_1024xy):
     NAME = "xyzrotvec-cam-512xy256d"
 
 class TrajectoryEncoder_molmo_1000(TrajectoryEncoder_xyzrotvec_1024xy):
-    XY_TOKENS = 1024 # as in 1024 tokens in total going from 0 to 511
+    XY_TOKENS = 1000 # as in 1024 tokens in total going from 0 to 511
     DEPTH_SCALE = 100
     #DEPTH_RANGE = (.1, 1.0)  # [meters]
     #DEPTH_TOKENS = 256

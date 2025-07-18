@@ -19,7 +19,7 @@ class H5Dataset(Dataset):
     def __init__(self, h5_file_or_dir, return_depth=False, augment_depth=None, depth_to_color=True,
                  augment_rgbds=None, augment_rgb=None, augment_text=None, return_only_prefix=False,
                  action_encoder="xyzrotvec-cam-1024xy", limit_samples=None, augment_rgb_forced=None,
-                 return_robot_pose=False):
+                 return_robot_pose=False, return_format="paligemma"):
         """
         The augment functions are applied in order same order as the order of arguments.
         """
@@ -52,6 +52,7 @@ class H5Dataset(Dataset):
 
         self.return_robot_pose = return_robot_pose
         self.return_only_prefix = return_only_prefix        # used only for paired dataset for setup
+        self.return_format = return_format
 
     def __len__(self):
         return self.h5_file_len
@@ -73,7 +74,34 @@ class H5Dataset(Dataset):
         random_idx = random.randint(0, len(self) - 1)
         return self.getitem_func(random_idx)
     
-        
+    @staticmethod
+    def format_molmo(image, entry):
+        image_np = np.asarray(image)
+        #from pdb import set_trace
+        #set_trace()
+        return {
+            "image": image_np,
+            "prompt": entry["prefix"],
+            "text": entry["suffix"],
+            "style": "pointing",
+            "metadata": {
+                "image": image_np,
+                "prompt": entry["prefix"],
+                "target_action": entry["suffix"],
+                "episode_id" : "unknown",
+                "house_id": "unknown",
+                "frame_idx": -1,
+                "task_type": False,
+                "include_scene": False,
+                "is_done_frame": False,
+                #"target_box": None,
+                "camera": entry["camera"]
+            }
+        }
+    
+    def get(self, idx, rnd=None):
+        return self.__getitem__(idx)
+
     def getitem_func(self, idx: int, force_augs=False):
         action_text = None
         try:
@@ -145,6 +173,12 @@ class H5Dataset(Dataset):
                 depth = np.clip((depth * 255).round(), 0, 255).astype(np.uint8)
             else:
                 depth = depth[:, :, 0] # depth im [mm]
+
+            assert self.return_format == "paligemma"
             return [depth, image], entry
         
+        if self.return_format == "molmo":
+            return self.format_molmo(image, entry)
+        else:
+            assert self.return_format == "paligemma"
         return image, entry
